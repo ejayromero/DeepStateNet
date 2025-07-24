@@ -9,4 +9,4 @@ Output/ica_rest_open/
 Output/ica_rest_close/
 Output/ica_rest_all/epochs/
 Output/ica_rest_all/gfp_peaks/
-/Output/
+Output/ica_rest_all/modkmeans_results/models/
