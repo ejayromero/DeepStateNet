@@ -1,0 +1,12 @@
+/.venv/
+__pycache__/
+/Data/
+/Papers/
+Other/
+backups/
+Notebooks/tests/
+Output/ica_rest_open/
+Output/ica_rest_close/
+Output/ica_rest_all/epochs/
+Output/ica_rest_all/gfp_peaks/
+/Output/
