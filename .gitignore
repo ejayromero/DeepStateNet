@@ -5,8 +5,17 @@ __pycache__/
 Other/
 backups/
 Notebooks/tests/
+/Output/
 Output/ica_rest_open/
 Output/ica_rest_close/
 Output/ica_rest_all/epochs/
 Output/ica_rest_all/gfp_peaks/
 Output/ica_rest_all/modkmeans_results/models/
+Output/ica_rest_all/adaptive/
+Output/ica_rest_all/adaptive_clean/
+Output/ica_rest_all/dependent/
+Output/ica_rest_all/dependent_harmonize/
+Output/ica_rest_all/independent/
+Output/ica_rest_all/independent_harmonize/
+Output/ica_rest_all/independent_clean/
+Output/ica_rest_all/tests/
