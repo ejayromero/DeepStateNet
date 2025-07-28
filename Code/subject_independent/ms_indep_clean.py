@@ -37,11 +37,16 @@ else:
     print("CUDA not available, using CPU")
 
 # ---------------------------# Load files ---------------------------
-data_path = 'Data/'
+script_dir = os.path.dirname(os.path.abspath(__file__))  # Current script directory
+project_root = os.path.dirname(os.path.dirname(script_dir))  # Up 2 levels: Code -> Master-Thesis
+# Set absolute paths
+data_path = os.path.join(project_root, 'Data') + os.sep
+output_folder = os.path.join(project_root, 'Output') + os.sep
+
 type_of_subject = 'independent_harmonize'  # or 'dep' for dependent subjects
 model_name = 'embedded_microsnet'  # 'microsnet' or 'multiscale_microsnet'
-output_path = f'Output/ica_rest_all/{type_of_subject}/'
-input_path = 'Output/ica_rest_all/'
+output_path = f'{output_folder}ica_rest_all/{type_of_subject}/'
+input_path = f'{output_folder}ica_rest_all/'
 # Making sure all paths exist
 if not os.path.exists(input_path):
     os.makedirs(input_path)

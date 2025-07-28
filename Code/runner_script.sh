@@ -17,7 +17,7 @@ echo "Timestamp: $(date)"
 echo ""
 
 # Check if scripts exist
-scripts_to_check=("subject_dependent/ms.py" "subject_independent/ms_indep.py" "subject_adaptive/ms_adapt.py")
+scripts_to_check=("subject_dependent/ms.py" "subject_independent/ms_indep_clean.py" "subject_adaptive/ms_adapt_clean.py")
 for script in "${scripts_to_check[@]}"; do
     if [[ ! -f "$script" ]]; then
         echo "Error: Script not found: $script"
@@ -71,11 +71,11 @@ echo "1. Submitting SUBJECT DEPENDENT experiment..."
 echo ""
 
 echo "2. Submitting SUBJECT INDEPENDENT experiment..."
-./tmux_scheduler.sh submit subject_independent/ms_indep.py "subject_independent_50subj" myvenv
+./tmux_scheduler.sh submit subject_independent/ms_indep_clean.py "subject_independent_50subj" myvenv
 echo ""
 
 echo "3. Submitting SUBJECT ADAPTIVE experiment..."
-./tmux_scheduler.sh submit subject_adaptive/ms_adapt.py "subject_adaptive_50subj" myvenv
+./tmux_scheduler.sh submit subject_adaptive/ms_adapt_clean.py "subject_adaptive_50subj" myvenv
 echo ""
 
 echo "All jobs submitted successfully!"

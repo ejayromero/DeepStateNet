@@ -36,11 +36,18 @@ else:
     print("CUDA not available, using CPU")
 mf.print_memory_status("- INITIAL STARTUP")
 # ---------------------------# Load files ---------------------------
-data_path = 'Data/'
+# Get the absolute path to the project root
+# Method 1: From script location, go up to project root
+script_dir = os.path.dirname(os.path.abspath(__file__))  # Current script directory
+project_root = os.path.dirname(os.path.dirname(script_dir))  # Up 2 levels: Code -> Master-Thesis
+# Set absolute paths
+data_path = os.path.join(project_root, 'Data') + os.sep
+output_folder = os.path.join(project_root, 'Output') + os.sep
+
 type_of_subject = 'dependent'  # or 'dep' for dependent subjects
 model_name = 'attention_microsnet'  # 'microsnet' or 'multiscale_microsnet'
-output_path = f'Output/ica_rest_all/{type_of_subject}/'
-input_path = 'Output/ica_rest_all/'
+output_path = f'{output_folder}ica_rest_all/{type_of_subject}/'
+input_path = f'{output_folder}ica_rest_all/'
 # Making sure all paths exist
 if not os.path.exists(input_path):
     os.makedirs(input_path)
@@ -53,7 +60,7 @@ n_subjects = 50
 num_epochs = 50
 batch_size = 32  # or 256 if memory allows
 subject_list = list(range(n_subjects))
-all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path)
+all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path, output_folder=output_folder)
 mf.print_memory_status("- AFTER DATA LOADING") 
 del all_data # Free memory after loading data
 if 'embedded' in model_name:
