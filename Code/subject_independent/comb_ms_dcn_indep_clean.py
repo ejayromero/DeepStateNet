@@ -1,18 +1,16 @@
 '''
-Script to train a combined model of EEG DeepConvNet and MicroSNet
+Script to train a combined model of EEG and Microstates DeepConvNet
+Clean version with embedded model support
 '''
+
 import os
 import sys
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set_theme(style="darkgrid")
-
-import mne
-import random
 import pickle
-
-from braindecode.models import Deep4Net
-from braindecode.classifier import EEGClassifier
 
 import torch
 import torch.nn as nn
@@ -21,16 +19,29 @@ import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from lib import my_functions as mf
-from lib.my_models import MicroSNet, FeatureExtractor, MultiModalClassifier, EmbeddedMicroSNet
 
+from lib import my_functions as mf
+from lib.my_models import FeatureExtractor, MultiModalClassifier, get_model, EmbeddedMicroSNet
 
 print(f'==================== Start of script {os.path.basename(__file__)}! ===================')
+
+# Explicit CUDA setup
+if torch.cuda.is_available():
+    device = torch.device("cuda:0")  # Specify GPU 0 explicitly
+    torch.cuda.set_device(0)
+    print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+    print(f"CUDA Version: {torch.version.cuda}")
+    print(f"Available GPUs: {torch.cuda.device_count()}")
+else:
+    device = torch.device("cpu")
+    print("CUDA not available, using CPU")
+
 # ---------------------------# Load files ---------------------------
 data_path = 'Data/'
-type_of_subject = 'dependent_harmonize'  # 'independent' or 'adaptive'
+type_of_subject = 'independent_harmonize'  # or 'dep' for dependent subjects
 model_name = 'embedded_microsnet'  # 'microsnet' or 'multiscale_microsnet'
 output_path = f'Output/ica_rest_all/{type_of_subject}/'
 input_path = 'Output/ica_rest_all/'
@@ -40,29 +51,34 @@ if not os.path.exists(input_path):
 if not os.path.exists(output_path):
     os.makedirs(output_path)
 
-# Parameters
+# Parameters 
 do_all = False
 n_subjects = 50
-batch_size = 32
+num_epochs = 50
+batch_size = 32  # or 256 if memory allows
+excluded_from_training = [-1]  # No exclusions for independent clean
 subject_list = list(range(n_subjects))
 all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path)
 
+# Load microstate data based on model type
 if 'embedded' in model_name:
     kmeans_path = os.path.join(input_path, 'modkmeans_results', 'modkmeans_sequence')
-    ms_timeseries_path = os.path.join(kmeans_path, 'modkmeans_sequence_indiv.pkl')
+    ms_timeseries_path = os.path.join(kmeans_path, 'modkmeans_sequence_harmonize_indiv.pkl')
 else:
     kmeans_path = os.path.join(input_path, 'modkmeans_results', 'ms_timeseries')
     ms_timeseries_path = os.path.join(kmeans_path, 'ms_timeseries_harmonize.pkl')
+
 with open(ms_timeseries_path, 'rb') as f:
     finals_ls = pickle.load(f)
 
-
+# Load results from individual models
 results = np.load(os.path.join(output_path, f'{type_of_subject}_results_ica_rest_all.npy'), allow_pickle=True).item()
 ms_results = np.load(os.path.join(output_path, f'{type_of_subject}_ms_{model_name}_results_ica_rest_all.npy'), allow_pickle=True).item()
+
 print(f'N_models in results: {len(results["models"])}')
 print(f'N_models in ms_results: {len(ms_results["models"])}')
 
-
+# -----------------------------# Functions ---------------------------
 def extract_features_from_single_model(model, data, device):
     """Extract features from a single model for one subject's data"""
     
@@ -91,77 +107,106 @@ def extract_features_from_single_model(model, data, device):
             print(f"  Format with singleton at dim 2, shape after squeeze: {x.shape}")
         else:
             print(f"  4D format without singleton, keeping as is: {x.shape}")
+            
     elif len(x.shape) == 3:
-        # Could be (n_trials, n_channels, timepoints) - microstate format
+        # Format: (n_trials, n_channels, timepoints)
         print(f"  3D format detected, shape: {x.shape}")
         
         # Check if this is microstate data with 2 channels (microstates + GFP)
         if x.shape[1] == 2:
-            print("  Detected microstate + GFP format")
+            print("  Detected microstate + GFP format with 2 channels")
             
             if is_embedded_model:
-                print("  Model is EmbeddedMicroSNet - extracting microstate sequences only")
+                print("  Processing for EmbeddedMicroSNet - extracting microstate sequences only")
                 # Extract only microstate sequences (first channel) for embedded models
-                x_microstates = x[:, 0, :]  # Shape: (batch_size, sequence_length)
+                x_microstates = x[:, 0, :]  # Shape: (n_trials, sequence_length)
+                print(f"  Extracted microstate sequences shape: {x_microstates.shape}")
                 
                 # Handle negative indices (embedding layers require indices >= 0)
                 min_val = torch.min(x_microstates).item()
+                max_val = torch.max(x_microstates).item()
+                print(f"  Microstate value range: {min_val} to {max_val}")
+                
                 if min_val < 0:
-                    print(f"  Found negative microstate indices ({min_val}), shifting to start from 0...")
+                    print(f"  Shifting negative indices to start from 0...")
                     x_microstates = x_microstates - min_val
-                    print(f"  New microstate range: {torch.min(x_microstates).item()} to {torch.max(x_microstates).item()}")
+                    new_min = torch.min(x_microstates).item()
+                    new_max = torch.max(x_microstates).item()
+                    print(f"  New microstate range: {new_min} to {new_max}")
                 
                 # CRITICAL: Convert to integer type for embedding
                 x = x_microstates.long()
-                print(f"  Converted to integer type for embedding: {x.dtype}")
-                print(f"  Preprocessed data shape for EmbeddedMicroSNet: {x.shape}")
+                print(f"  Final data shape for EmbeddedMicroSNet: {x.shape}, dtype: {x.dtype}")
+                
             else:
-                print("  Model expects one-hot encoded data - converting microstate sequences")
+                print("  Processing for standard MicroSNet - converting to one-hot encoding")
                 # For other models, convert to one-hot encoding
-                x_microstates = x[:, 0, :].long()
+                x_microstates = x[:, 0, :].long()  # Extract microstate sequences
                 
                 # Handle negative indices
                 min_val = torch.min(x_microstates).item()
                 if min_val < 0:
+                    print(f"  Shifting negative indices: {min_val}")
                     x_microstates = x_microstates - min_val
                 
                 n_microstates = int(torch.max(x_microstates).item()) + 1
                 sequence_length = x_microstates.shape[1]
+                print(f"  Creating one-hot encoding: {n_microstates} microstates, {sequence_length} timepoints")
                 
-                # Convert to one-hot encoding
+                # Convert to one-hot encoding: (n_trials, n_microstates, sequence_length)
                 x_onehot = torch.zeros(x_microstates.shape[0], n_microstates, sequence_length)
                 x_onehot.scatter_(1, x_microstates.unsqueeze(1), 1)
                 x = x_onehot.float()
-                print(f"  Converted to one-hot shape: {x.shape}")
+                print(f"  One-hot encoded shape: {x.shape}")
         else:
-            # Standard 3D format - ensure correct type
-            if is_embedded_model and x.dtype == torch.float32:
-                x = x.long()
-                print(f"  Converted 3D data to integer type for embedding: {x.dtype}")
-            elif not is_embedded_model and x.dtype != torch.float32:
-                x = x.float()
-                print(f"  Converted 3D data to float type: {x.dtype}")
-                
+            # Other 3D formats
+            print(f"  Standard 3D format with {x.shape[1]} channels")
+            if is_embedded_model:
+                # For embedded models, assume this is already in the right format but wrong type
+                if x.dtype in [torch.float32, torch.float64]:
+                    x = x.long()
+                    print(f"  Converted to integer type for embedding: {x.dtype}")
+            else:
+                # For non-embedded models, ensure float type
+                if x.dtype != torch.float32:
+                    x = x.float()
+                    print(f"  Converted to float type: {x.dtype}")
+                    
     elif len(x.shape) == 2:
-        # Could be (n_trials, sequence_length) - embedded microstate format
-        print(f"  2D format (likely embedded microstate), shape: {x.shape}")
+        # Format: (n_trials, sequence_length) - embedded microstate format
+        print(f"  2D format (embedded microstate sequences), shape: {x.shape}")
         
         if is_embedded_model:
             # Ensure integer type for embedding
-            if x.dtype == torch.float32 or x.dtype == torch.float64:
+            if x.dtype in [torch.float32, torch.float64]:
                 print(f"  Converting 2D float data to integer indices for embedded model")
                 x = x.long()
             
             # Handle negative indices
             min_val = torch.min(x).item()
+            max_val = torch.max(x).item()
+            print(f"  Value range: {min_val} to {max_val}")
+            
             if min_val < 0:
-                print(f"  Found negative indices ({min_val}), shifting to start from 0...")
+                print(f"  Shifting negative indices to start from 0...")
                 x = x - min_val
-                print(f"  New range: {torch.min(x).item()} to {torch.max(x).item()}")
+                new_min = torch.min(x).item()
+                new_max = torch.max(x).item()
+                print(f"  New range: {new_min} to {new_max}")
                 
-        print(f"  Final data type: {x.dtype}")
+        print(f"  Final 2D data type: {x.dtype}, shape: {x.shape}")
     else:
         print(f"  Unexpected shape: {x.shape}")
+        raise ValueError(f"Unexpected data shape: {x.shape}")
+    
+    # Validate final data format before feature extraction
+    print(f"  Final preprocessed data - Shape: {x.shape}, Dtype: {x.dtype}")
+    
+    if is_embedded_model:
+        if x.dtype not in [torch.int64, torch.int32, torch.long]:
+            raise ValueError(f"EmbeddedMicroSNet requires integer data, got {x.dtype}")
+        if len(x.shape) != 2:
+            raise ValueError(f"EmbeddedMicroSNet requires 2D input (batch_size, sequence_length), got {x.shape}")
     
     # Create feature extractor
     feature_extractor = FeatureExtractor(model).to(device)
@@ -173,12 +218,18 @@ def extract_features_from_single_model(model, data, device):
     with torch.no_grad():
         for i in range(0, len(x), batch_size):
             batch_x = x[i:i+batch_size].to(device)
+            print(f"  Processing batch {i//batch_size + 1}: shape {batch_x.shape}, dtype {batch_x.dtype}")
+            
             try:
                 batch_features = feature_extractor(batch_x)
                 features_list.append(batch_features.cpu())
             except Exception as e:
-                print(f"  Error processing batch {i}: {e}")
-                print(f"  Batch shape: {batch_x.shape}, dtype: {batch_x.dtype}")
+                print(f"  ERROR in batch {i//batch_size + 1}:")
+                print(f"    Batch shape: {batch_x.shape}")
+                print(f"    Batch dtype: {batch_x.dtype}")
+                print(f"    Model type: {type(model_backbone)}")
+                print(f"    Is embedded: {is_embedded_model}")
+                print(f"    Error: {e}")
                 raise
     
     subject_features = torch.cat(features_list, dim=0)
@@ -187,8 +238,8 @@ def extract_features_from_single_model(model, data, device):
     return subject_features
 
 def train_single_multimodal_classifier(raw_features, ms_features, labels, n_classes, 
-                                     subject_id, test_size=0.2, val_size=0.25, 
-                                     device='cuda', num_epochs=100, lr=0.001):
+                                    subject_id, test_size=0.2, val_size=0.25, 
+                                    device='cuda', num_epochs=100, lr=0.001):
     """Train a classifier on combined features for a single subject"""
     
     print(f"\nTraining multimodal classifier for Subject {subject_id}")
@@ -238,7 +289,7 @@ def train_single_multimodal_classifier(raw_features, ms_features, labels, n_clas
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
-    if val_idx.any():
+    if len(val_idx) > 0:
         val_dataset = TensorDataset(
             raw_features[val_idx], ms_features[val_idx], labels[val_idx]
         )
@@ -334,8 +385,8 @@ def train_single_multimodal_classifier(raw_features, ms_features, labels, n_clas
         
         if epoch % 20 == 0:
             print(f"  Epoch {epoch}/{num_epochs}: "
-                  f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, "
-                  f"Val Acc: {val_acc:.2f}%")
+                f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, "
+                f"Val Acc: {val_acc:.2f}%")
     
     # Load best model and test
     model.load_state_dict(best_model_state)
@@ -381,87 +432,121 @@ def train_single_multimodal_classifier(raw_features, ms_features, labels, n_clas
     }
 
 def run_subject_specific_multimodal_pipeline(results, ms_results, all_data, finals_ls, all_y, 
-                                           n_subjects=5, device='cuda'):
+                                            n_subjects=50, device='cuda'):
     """
-    Main function to run subject-specific multimodal classifiers
-    
-    Args:
-        results: Dictionary containing 'models' key with raw EEG models
-        ms_results: Dictionary containing 'models' key with microstate models (first 5 subjects)
-        all_data: List of arrays for raw EEG, shape (n_subjects, n_trials, 1, n_channels, timepoints)
-        finals_ls: List of arrays for microstate timeseries, shape (n_subjects, n_trials, n_channels, timepoints)
-        all_y: List of arrays, shape (n_subjects, n_trials)
-        n_subjects: Number of subjects to process (default 5)
-        device: Device to run computations on
+    Leave-one-subject-out (LOSO) training:
+    - 1 subject = test
+    - 4 randomly sampled validation subjects (fixed seed) from non-excluded subjects
+    - Remaining non-excluded subjects for training
+    - Excludes specified subjects from training/validation
+    Uses the same output format as the original function.
     """
-    
     print(f"Starting subject-specific multimodal pipeline for {n_subjects} subjects...")
+
+    print(f"Excluded subjects from training: {excluded_from_training}")
     
-    # Ensure we have enough models
-    assert len(ms_results['models']) >= n_subjects, f"ms_results has only {len(ms_results['models'])} models, need {n_subjects}"
-    assert len(results['models']) >= n_subjects, f"results has only {len(results['models'])} models, need {n_subjects}"
-    
-    all_subject_results = []
-    
+    output_file = os.path.join(output_path, f'{type_of_subject}_comb_{model_name}_results_ica_rest_all.npy')
+
     for subject_id in range(n_subjects):
+        if os.path.exists(output_file):
+            print(f"Loading existing results for Subject {subject_id} from {output_file}")
+            all_subject_results = np.load(output_file, allow_pickle=True).tolist()
+        else:
+            all_subject_results = []
+        if len(all_subject_results) > subject_id:
+            print(f"Skipping Subject {subject_id}, results already exist.")
+            continue
+
         print(f"\n{'='*60}")
         print(f"Processing Subject {subject_id}")
         print(f"{'='*60}")
-        
-        # Get data for this subject
-        raw_data = all_data[subject_id]
-        ms_data = finals_ls[subject_id]
-        labels = torch.tensor(all_y[subject_id], dtype=torch.long)
-        
-        print(f"Raw data shape: {np.array(raw_data).shape}")
-        print(f"MS data shape: {np.array(ms_data).shape}")
-        print(f"Labels shape: {labels.shape}")
-        
-        # Extract features from raw EEG model
-        print(f"Extracting features from raw EEG model...")
-        raw_features = extract_features_from_single_model(
-            results['models'][subject_id], raw_data, device
-        )
-        
-        # Extract features from microstate model
-        print(f"Extracting features from microstate model...")
-        ms_features = extract_features_from_single_model(
-            ms_results['models'][subject_id], ms_data, device
-        )
-        
-        # Get number of classes for this subject
-        n_classes = len(torch.unique(labels))
-        print(f"Number of classes: {n_classes}")
-        
-        # Print data distribution
-        print(f"Total samples: {len(labels)}")
-        for class_id in range(n_classes):
-            count = (labels == class_id).sum().item()
-            print(f"  Class {class_id}: {count} samples ({count/len(labels)*100:.1f}%)")
-        
-        # Train subject-specific multimodal classifier
+
+        mf.set_seed(42)  # Ensure reproducible splits
+
+        # --- LOSO Subject Splits with Exclusions ---
+        # Choose validation subjects (4 random ones not equal to test_id and not in excluded list)
+        val_candidates, val_ids = mf.get_val_ids(42, subject_id, excluded_from_training)
+
+        # Remaining for training (excluding test subject and excluded subjects)
+        train_ids = [i for i in val_candidates if i not in val_ids]
+
+        print(f"Train IDs: {train_ids} (total: {len(train_ids)})")
+        print(f"Val IDs:   {val_ids}")
+        print(f"Test ID:   {subject_id}")
+        print(f"Excluded from training: {excluded_from_training}")
+
+        # --- Extract Features ---
+        def extract_group_features(ids, model_dict, data_source):
+            features, labels = [], []
+            for i in ids:
+                feats = extract_features_from_single_model(model_dict['models'][i], data_source[i], device)
+                features.append(feats)
+                labels.append(torch.tensor(all_y[i], dtype=torch.long))
+            return torch.cat(features), torch.cat(labels)
+
+        raw_train_feats, y_train = extract_group_features(train_ids, results, all_data)
+        ms_train_feats, _ = extract_group_features(train_ids, ms_results, finals_ls)
+
+        raw_val_feats, y_val = extract_group_features(val_ids, results, all_data)
+        ms_val_feats, _ = extract_group_features(val_ids, ms_results, finals_ls)
+
+        raw_features = torch.cat([raw_train_feats, raw_val_feats], dim=0)
+        ms_features = torch.cat([ms_train_feats, ms_val_feats], dim=0)
+        labels = torch.cat([y_train, y_val], dim=0)
+
+        val_size_ratio = len(y_val) / len(labels)
+
+        # --- Train Classifier ---
         subject_results = train_single_multimodal_classifier(
-            raw_features, ms_features, labels, n_classes, subject_id, device=device
+            raw_features, ms_features, labels,
+            n_classes=len(torch.unique(labels)),
+            subject_id=subject_id,
+            test_size=val_size_ratio,
+            device=device
         )
-        
+
+        # --- Test on held-out subject ---
+        raw_test_feats = extract_features_from_single_model(results['models'][subject_id], all_data[subject_id], device)
+        ms_test_feats = extract_features_from_single_model(ms_results['models'][subject_id], finals_ls[subject_id], device)
+        y_test = torch.tensor(all_y[subject_id], dtype=torch.long)
+
+        model = subject_results['model'].to(device)
+        model.eval()
+        preds = []
+        with torch.no_grad():
+            for i in range(0, len(y_test), 32):
+                out = model(raw_test_feats[i:i+32].to(device), ms_test_feats[i:i+32].to(device))
+                preds.extend(out.argmax(dim=1).cpu().numpy())
+
+        test_acc = accuracy_score(y_test.numpy(), preds) * 100
+        print(f"✅ Subject {subject_id} Test Accuracy: {test_acc:.2f}%")
+
+        subject_results.update({
+            'test_accuracy': test_acc,
+            'true_labels': y_test.numpy(),
+            'predictions': preds
+        })
+
         all_subject_results.append(subject_results)
-        print(f"Subject {subject_id} results: {subject_results['test_accuracy']:.2f}% test accuracy")
-    
-    # Print summary
+        print(f"Saving results for Subject {subject_id}...")
+        np.save(output_file, all_subject_results, allow_pickle=True)
+
+    # --- Summary ---
     print(f"\n{'='*60}")
     print("SUMMARY OF ALL SUBJECTS")
     print(f"{'='*60}")
-    
+
     test_accuracies = [res['test_accuracy'] for res in all_subject_results]
     val_accuracies = [res['best_val_accuracy'] for res in all_subject_results]
-    
+
     print(f"Test Accuracies:")
     for i, acc in enumerate(test_accuracies):
         print(f"  Subject {i}: {acc:.2f}%")
-    
+
     print(f"\nAverage Test Accuracy: {np.mean(test_accuracies):.2f}% ± {np.std(test_accuracies):.2f}%")
     print(f"Average Validation Accuracy: {np.mean(val_accuracies):.2f}% ± {np.std(val_accuracies):.2f}%")
-    summary_results = {
+
+    return {
         'subject_results': all_subject_results,
         'summary': {
             'test_accuracies': test_accuracies,
@@ -472,16 +557,20 @@ def run_subject_specific_multimodal_pipeline(results, ms_results, all_data, fina
             'std_val_acc': np.std(val_accuracies)
         }
     }
-    return summary_results
 
-# Example usage:
+
+# ----------------------------------- Run training -----------------------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Run the subject-specific multimodal pipeline for first 5 subjects
+# Run the subject-specific multimodal pipeline for all subjects
 multimodal_results = run_subject_specific_multimodal_pipeline(
     results, ms_results, all_data, finals_ls, all_y, 
     n_subjects=len(ms_results['models']), device=device
 )
+
+# Save the results
+output_file = os.path.join(output_path, f'{type_of_subject}_multimodal_{model_name}_results_ica_rest_all.npy')
+np.save(output_file, multimodal_results, allow_pickle=True)
 
 print(f"\nMultimodal pipeline completed!")
 print(f"Average performance across 50 subjects: {multimodal_results['summary']['mean_test_acc']:.2f}%")
@@ -489,8 +578,43 @@ print(f"Average performance across 50 subjects: {multimodal_results['summary']['
 # Access individual subject results
 for i, subject_result in enumerate(multimodal_results['subject_results']):
     print(f"Subject {i}: {subject_result['test_accuracy']:.2f}% test accuracy")
-    # Access the trained model: subject_result['model']
 
-# Save the results
-output_file = os.path.join(output_path, f'{type_of_subject}_multimodal_{model_name}_results_ica_rest_all.npy')
-np.save(output_file, multimodal_results)
+accuracy_list = [res['test_accuracy'] for res in multimodal_results['subject_results']]
+
+# ------------------------------ Plotting the results ------------------------------
+plt.figure(figsize=(15, 6))
+plt.plot(range(len(accuracy_list)), accuracy_list, marker='o', linestyle='-')
+plt.title(f'Subject {type_of_subject} {model_name.upper()} Test Accuracies for Each Subject')
+plt.xlabel('Subject ID')
+plt.ylabel('Test Accuracy (%)')
+plt.xticks(range(len(accuracy_list)), [f'S{i}' for i in range(len(accuracy_list))], rotation=45)
+plt.tight_layout()
+plt.savefig(os.path.join(output_path, f'{type_of_subject}_multimodal_{model_name}_test_accuracies.png'))
+plt.close()
+
+plt.figure(figsize=(15, 6))
+plt.plot(results['test_accuracies'], marker='x', linestyle='--', label='DeepConvNet Raw EEG', color='orange')
+plt.plot(ms_results['test_accuracies'], marker='s', linestyle=':', label=f'DeepConvNet {model_name.replace("_", " ").title()}', color='green')
+plt.plot(accuracy_list, marker='o', linestyle='-', label='Combined', color='blue')
+plt.xlabel('Subject ID')
+plt.ylabel('Test Accuracy (%)')
+plt.xticks(range(50), [f'S{i}' for i in range(50)], rotation=45)
+plt.title(f'Subject {type_of_subject} {model_name.upper()} Test Accuracies for Each Subject')
+plt.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(output_path, f'{type_of_subject}_multimodal_{model_name}_vs_individual_test_accuracies.png'))
+plt.close()
+
+plt.figure(figsize=(10, 6))
+sns.violinplot(data=[results['test_accuracies'], ms_results['test_accuracies'], accuracy_list],
+            palette=['orange', 'green', 'blue'], cut=0)
+plt.xticks([0, 1, 2], ['DeepConvNet Raw EEG', f'DeepConvNet {model_name.replace("_", " ").title()}', 'Combined'])
+plt.title(f'Subject {type_of_subject} {model_name.upper()} Distribution of Test Accuracies')
+plt.ylabel('Test Accuracy (%)')
+plt.xlabel('Model Type')
+plt.ylim(0, 100)
+plt.tight_layout()
+plt.savefig(os.path.join(output_path, f'{type_of_subject}_test_accuracy_{model_name}_distribution.png'))
+plt.close()
+
+print(f'==================== End of script {os.path.basename(__file__)}! ===================')

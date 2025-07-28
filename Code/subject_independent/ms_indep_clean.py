@@ -1,6 +1,8 @@
 '''
-Script to train MicroSNet on Microstates timeseries
+Script to train MicroSNet on 50 subjects using independent training (leave-one-subject-out)
+Clean version using modular approach with embedded model support
 '''
+
 import os
 import sys
 import numpy as np
@@ -36,7 +38,7 @@ else:
 
 # ---------------------------# Load files ---------------------------
 data_path = 'Data/'
-type_of_subject = 'dependent'  # or 'dep' for dependent subjects
+type_of_subject = 'independent_harmonize'  # or 'dep' for dependent subjects
 model_name = 'embedded_microsnet'  # 'microsnet' or 'multiscale_microsnet'
 output_path = f'Output/ica_rest_all/{type_of_subject}/'
 input_path = 'Output/ica_rest_all/'
@@ -51,21 +53,23 @@ do_all = False
 n_subjects = 50
 num_epochs = 50
 batch_size = 32  # or 256 if memory allows
+excluded_from_training = [-1]  # No exclusions for independent clean
 subject_list = list(range(n_subjects))
 all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path)
 
 if 'embedded' in model_name:
     kmeans_path = os.path.join(input_path, 'modkmeans_results', 'modkmeans_sequence')
-    ms_timeseries_path = os.path.join(kmeans_path, 'modkmeans_sequence_indiv.pkl')
+    ms_timeseries_path = os.path.join(kmeans_path, 'modkmeans_sequence_harmonize_indiv.pkl')
 else:
     kmeans_path = os.path.join(input_path, 'modkmeans_results', 'ms_timeseries')
-    ms_timeseries_path = os.path.join(kmeans_path, 'ms_timeseries.pkl')
+    ms_timeseries_path = os.path.join(kmeans_path, 'ms_timeseries_harmonize.pkl')
 with open(ms_timeseries_path, 'rb') as f:
     finals_ls = pickle.load(f)
 
 mf.set_seed(42)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# ---------- Loop Through Subjects (Leave-One-Subject-Out) ----------
 if n_subjects == 1:
     test_subjects = [0]
 else:
@@ -73,9 +77,8 @@ else:
     
 output_file = os.path.join(output_path, f'{type_of_subject}_ms_{model_name}_results_ica_rest_all.npy')
 
-# ---------- Loop Through Subjects ----------
-for id in range(n_subjects):
-    print(f"\n▶ Training Subject {id}")
+for test_id in test_subjects:
+    
     if os.path.exists(output_file):
         results = np.load(output_file, allow_pickle=True).item()
         all_train_accuracies = results['train_accuracies']
@@ -92,77 +95,203 @@ for id in range(n_subjects):
         all_val_losses = []
         all_models = []
     
-    if len(all_train_accuracies) > id:
-        print(f"Skipping Subject {id} as it has already been processed.")
+    if len(all_train_accuracies) > test_id:
+        print(f"Skipping Subject {test_id} as it has already been processed.")
         continue
-    print(f"\n\n==================== Subject {id} ====================")
+    print(f"\n\n==================== Subject {test_id} ====================")
 
-    # Keep original data handling - using finals_ls instead of all_data
-    x = torch.tensor(finals_ls[id], dtype=torch.float32)
+    # Choose validation subjects (4 random ones not equal to test_id)
+    val_candidates, val_ids = mf.get_val_ids(42, test_id, excluded_from_training)
 
+    # Remaining for training
+    train_ids = [i for i in val_candidates if i not in val_ids]
+
+    # Process and concatenate training data with embedded model support
+    x_train_list = []
+    y_train_list = []
+    n_microstates = None  # Will be determined from data
+    sequence_length = None
+    global_min_val = None  # Track global min across all subjects
+    global_max_val = None  # Track global max across all subjects
+    
+    # First pass: determine global min/max values across ALL subjects in the dataset
+    # Since microstates are harmonized, we need to find the global range across all 50 subjects
+    print("Determining global microstate range across all subjects...")
+    all_possible_subjects = list(range(n_subjects))  # All 50 subjects
+    
+    for i in all_possible_subjects:
+        x = torch.tensor(finals_ls[i], dtype=torch.float32)
+        x_microstates = x[:, 0, :].long()
+        
+        current_min = torch.min(x_microstates).item()
+        current_max = torch.max(x_microstates).item()
+        
+        if global_min_val is None or current_min < global_min_val:
+            global_min_val = current_min
+        if global_max_val is None or current_max > global_max_val:
+            global_max_val = current_max
+    
+    print(f"Global microstate range across all {n_subjects} subjects: {global_min_val} to {global_max_val}")
+    
+    # Apply global shift if needed
+    shift_amount = 0
+    if global_min_val < 0:
+        shift_amount = -global_min_val
+        print(f"Applying global shift of {shift_amount} to handle negative indices")
+    
+    # Determine final parameters - must accommodate the full global range
+    n_microstates = int(global_max_val + shift_amount) + 1
+    print(f"Embedding layer size (n_microstates): {n_microstates}")
+    print(f"This accounts for the full harmonized microstate space")
+    
+    for i in train_ids:
+        x = torch.tensor(finals_ls[i], dtype=torch.float32)
+        
+        if 'embedded' in model_name:
+            # For EmbeddedMicroSNet: use only the microstate sequences (first channel)
+            x_microstates = x[:, 0, :].long()  # Shape: (batch_size, sequence_length)
+            
+            # Apply global shift
+            if shift_amount > 0:
+                x_microstates = x_microstates + shift_amount
+            
+            x_processed = x_microstates
+            if sequence_length is None:
+                sequence_length = x_microstates.shape[1]
+            
+            # Debug: check final range for this subject
+            unique_microstates = torch.unique(x_microstates).tolist()
+            print(f"Subject {i} uses microstates: {unique_microstates} (count: {len(unique_microstates)})")
+            
+        else:
+            # For other models: convert microstate sequences to one-hot encoding
+            x_microstates = x[:, 0, :].long()  # Extract microstate sequences
+            
+            # Apply global shift
+            if shift_amount > 0:
+                x_microstates = x_microstates + shift_amount
+            
+            if sequence_length is None:
+                sequence_length = x_microstates.shape[1]
+            
+            # Convert to one-hot encoding
+            x_onehot = torch.zeros(x_microstates.shape[0], n_microstates, sequence_length)
+            x_onehot.scatter_(1, x_microstates.unsqueeze(1), 1)
+            x_processed = x_onehot
+        
+        x_train_list.append(x_processed)
+        y_train_list.append(torch.tensor(all_y[i], dtype=torch.long))
+    
+    x_train = torch.cat(x_train_list, dim=0)
+    y_train = torch.cat(y_train_list, dim=0)
+
+    # Process validation data
+    x_val_list = []
+    y_val_list = []
+    for i in val_ids:
+        x = torch.tensor(finals_ls[i], dtype=torch.float32)
+        
+        if 'embedded' in model_name:
+            # For EmbeddedMicroSNet: use only the microstate sequences (first channel)
+            x_microstates = x[:, 0, :].long()  # Shape: (batch_size, sequence_length)
+            
+            # Apply same global shift
+            if shift_amount > 0:
+                x_microstates = x_microstates + shift_amount
+            
+            x_processed = x_microstates
+            
+            # Debug: check unique microstates for this validation subject
+            unique_microstates = torch.unique(x_microstates).tolist()
+            print(f"Val Subject {i} uses microstates: {unique_microstates}")
+            
+        else:
+            # For other models: convert microstate sequences to one-hot encoding
+            x_microstates = x[:, 0, :].long()  # Extract microstate sequences
+            
+            # Apply same global shift
+            if shift_amount > 0:
+                x_microstates = x_microstates + shift_amount
+            
+            # Convert to one-hot encoding
+            x_onehot = torch.zeros(x_microstates.shape[0], n_microstates, sequence_length)
+            x_onehot.scatter_(1, x_microstates.unsqueeze(1), 1)
+            x_processed = x_onehot
+        
+        x_val_list.append(x_processed)
+        y_val_list.append(torch.tensor(all_y[i], dtype=torch.long))
+    
+    x_val = torch.cat(x_val_list, dim=0)
+    y_val = torch.cat(y_val_list, dim=0)
+
+    # Process test data
+    x = torch.tensor(finals_ls[test_id], dtype=torch.float32)
+    
     if 'embedded' in model_name:
         # For EmbeddedMicroSNet: use only the microstate sequences (first channel)
         x_microstates = x[:, 0, :].long()  # Shape: (batch_size, sequence_length)
         
-        # Handle negative indices (embedding layers require indices >= 0)
-        min_val = torch.min(x_microstates).item()
-        if min_val < 0:
-            print(f"Found negative microstate indices ({min_val}), shifting to start from 0...")
-            x_microstates = x_microstates - min_val  # Shift so minimum becomes 0
-            print(f"New microstate range: {torch.min(x_microstates).item()} to {torch.max(x_microstates).item()}")
+        # Apply same global shift
+        if shift_amount > 0:
+            x_microstates = x_microstates + shift_amount
         
-        x = x_microstates
-        n_microstates = int(torch.max(x).item()) + 1
-        sequence_length = x.shape[1]  # For categorical data: (batch_size, sequence_length)
+        x_test = x_microstates
         
-        print(f"Using microstate sequences only for {model_name}")
-        print(f"Microstate data shape: {x.shape}")
-        print(f"Microstate range: {torch.min(x).item()} to {torch.max(x).item()}")
+        # Debug: check unique microstates for test subject
+        unique_microstates = torch.unique(x_microstates).tolist()
+        print(f"Test Subject {test_id} uses microstates: {unique_microstates}")
+        
+        # Final validation - check that all indices are within embedding bounds
+        max_val = torch.max(x_test).item()
+        min_val = torch.min(x_test).item()
+        print(f"Test data microstate range: {min_val} to {max_val}")
+        if max_val >= n_microstates:
+            print(f"ERROR: Maximum microstate index ({max_val}) >= n_microstates ({n_microstates})")
+            print(f"This will cause the embedding layer to fail!")
+        else:
+            print(f"✓ All microstate indices are within embedding bounds [0, {n_microstates-1}]")
         
     else:
         # For other models: convert microstate sequences to one-hot encoding
         x_microstates = x[:, 0, :].long()  # Extract microstate sequences
         
-        # Handle negative indices
-        min_val = torch.min(x_microstates).item()
-        if min_val < 0:
-            print(f"Found negative microstate indices ({min_val}), shifting to start from 0...")
-            x_microstates = x_microstates - min_val
-        
-        n_microstates = int(torch.max(x_microstates).item()) + 1
-        sequence_length = x_microstates.shape[1]
+        # Apply same global shift
+        if shift_amount > 0:
+            x_microstates = x_microstates + shift_amount
         
         # Convert to one-hot encoding
         x_onehot = torch.zeros(x_microstates.shape[0], n_microstates, sequence_length)
         x_onehot.scatter_(1, x_microstates.unsqueeze(1), 1)
-        x = x_onehot
+        x_test = x_onehot
+    
+    y_test = torch.tensor(all_y[test_id], dtype=torch.long)
+
+    print(f"Training data shape: {x_train.shape}")
+    print(f"Validation data shape: {x_val.shape}")
+    print(f"Test data shape: {x_test.shape}")
+    print(f"Embedding layer size (n_microstates): {n_microstates}")
+    print(f"Sequence length: {sequence_length}")
+    print(f"Number of classes: {len(torch.unique(y_train))}")
+    
+    if 'embedded' in model_name:
+        print(f"Using microstate sequences for {model_name}")
+        print(f"Each subject uses ~5 microstates from the global harmonized space")
         
+        # Additional validation
+        train_unique = len(torch.unique(x_train))
+        val_unique = len(torch.unique(x_val)) 
+        test_unique = len(torch.unique(x_test))
+        print(f"Unique microstates in train/val/test: {train_unique}/{val_unique}/{test_unique}")
+    else:
         print(f"Converted microstate sequences to one-hot for {model_name}")
-        print(f"One-hot data shape: {x.shape}")
-
-    y = torch.tensor(all_y[id], dtype=torch.long)
-
-    print(f"Final data shape: {x.shape}")
-    print(f"Labels shape: {y.shape}")
-    print(f"Number of microstate categories: {n_microstates}")
-    print(f"Number of classes: {len(torch.unique(y))}")
-
-    # ---------- Data Splitting ----------
-    x_trainval, x_test, y_trainval, y_test = train_test_split(
-        x, y, test_size=0.2, random_state=42, stratify=y)
-
-    x_train, x_val, y_train, y_val = train_test_split(
-        x_trainval, y_trainval, test_size=0.25, random_state=42, stratify=y_trainval)
 
     # ---------- DataLoaders ----------
-    batch_size = 32
     train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(TensorDataset(x_val, y_val), batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(TensorDataset(x_test, y_test), batch_size=batch_size, shuffle=False)
 
     # ---------- Model ----------
-    # n_microstates = x.shape[1]  # Number of microstate categories
-    n_classes = len(torch.unique(y))
+    n_classes = len(torch.unique(y_train))
     
     # Create model using factory function
     model = mm.get_model(
@@ -245,7 +374,7 @@ for id in range(n_subjects):
             test_total += batch_y.size(0)
 
     test_acc = test_correct / test_total * 100
-    print(f"✅ Subject {id} Test Accuracy: {test_acc:.2f}%")
+    print(f"✅ Subject {test_id} Test Accuracy: {test_acc:.2f}%")
 
     # ---------- Save Results ----------
     all_train_accuracies.append(train_accuracies)
@@ -265,7 +394,7 @@ for id in range(n_subjects):
     }
     np.save(output_file, results)
     print(f"Results saved to {output_file}")
-    print(f"✅ Subject {id} processed successfully.\n\n")
+    print(f"✅ Subject {test_id} processed successfully.\n\n")
 
 # ---------- Summary Results ----------
 print(f"\n🎯 Overall Results:")

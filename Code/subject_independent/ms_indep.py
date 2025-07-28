@@ -3,11 +3,10 @@ Script to train MicroSNet on 50 subjects using independent training (leave-one-s
 Clean version using modular approach
 '''
 
-print('==================== Start of script microsnet_indep.py! ===================')
 
 import os
+import sys
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set_theme(style="darkgrid")
@@ -24,15 +23,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 from sklearn.model_selection import train_test_split
 
-# change directory go into Notebooks folder
-if os.path.basename(os.getcwd()) != 'Notebooks':
-    if os.path.basename(os.getcwd()) == 'lib':
-        os.chdir(os.path.join(os.getcwd(), '..', 'Notebooks'))
-    else:
-        os.chdir(os.path.join(os.getcwd(), 'Notebooks'))
-else:
-    # if already in Notebooks folder, do nothing
-    pass
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib import my_functions as mf
 from lib import my_models as mm
@@ -52,29 +43,9 @@ else:
 test_tensor = torch.randn(10, 10).to(device)
 print(f"Test tensor device: {test_tensor.device}")
 
-# ---------------------------# Parameters ---------------------------
-# excluded_from_training = [2, 12, 14, 20, 22, 23, 30, 39, 46]
-excluded_from_training = [-1]  # No exclusions for independent clean
-num_epochs = 50
-batch_size = 32  # or 256 if memory allows
-model_name = 'microsnet'  # 'microsnet', 'multiscale_microsnet', or 'embedded_microsnet'
-type_of_subject = f'independent_harmonize'
+print(f'==================== Start of script {os.path.basename(__file__)}! ===================')
 
-# ---------------------------# Load files ---------------------------
-data_path = '../Data/'
-output_path = f'../Output/ica_rest_all/{type_of_subject}/'
-input_path = f'../Output/ica_rest_all/'
-do_all = False
-n_subjects = 50
-subject_list = list(range(n_subjects))
-all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all)
-
-if not os.path.exists(output_path):
-    os.makedirs(output_path)
-    
-ms_timeseries_path = os.path.join(input_path, 'ms_timeseries_harmonize.pkl')
-with open(ms_timeseries_path, 'rb') as f:
-    finals_ls = pickle.load(f)
+# Explicit CUDA setup
 if torch.cuda.is_available():
     device = torch.device("cuda:0")  # Specify GPU 0 explicitly
     torch.cuda.set_device(0)
@@ -84,6 +55,40 @@ if torch.cuda.is_available():
 else:
     device = torch.device("cpu")
     print("CUDA not available, using CPU")
+
+# ---------------------------# Load files ---------------------------
+data_path = 'Data/'
+type_of_subject = 'independent_harmonize'  # or 'dep' for dependent subjects
+model_name = 'embedded_microsnet'  # 'microsnet' or 'multiscale_microsnet'
+output_path = f'Output/ica_rest_all/{type_of_subject}/'
+input_path = 'Output/ica_rest_all/'
+# Making sure all paths exist
+if not os.path.exists(input_path):
+    os.makedirs(input_path)
+if not os.path.exists(output_path):
+    os.makedirs(output_path)
+
+# Parameters 
+do_all = False
+n_subjects = 50
+num_epochs = 50
+batch_size = 32  # or 256 if memory allows
+# excluded_from_training = [2, 12, 14, 20, 22, 23, 30, 39, 46]
+excluded_from_training = [-1]  # No exclusions for independent clean
+subject_list = list(range(n_subjects))
+all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path)
+
+if not os.path.exists(output_path):
+    os.makedirs(output_path)
+    
+if 'embedded' in model_name:
+    kmeans_path = os.path.join(input_path, 'modkmeans_results', 'modkmeans_sequence')
+    ms_timeseries_path = os.path.join(kmeans_path, 'modkmeans_sequence_harmonize_indiv.pkl')
+else:
+    kmeans_path = os.path.join(input_path, 'modkmeans_results', 'ms_timeseries')
+    ms_timeseries_path = os.path.join(kmeans_path, 'ms_timeseries_harmonize.pkl')
+with open(ms_timeseries_path, 'rb') as f:
+    finals_ls = pickle.load(f)
 mf.set_seed(42)
 
 # ---------- Loop Through Subjects (Leave-One-Subject-Out) ----------

@@ -2,46 +2,32 @@
 Script to train model on 50 subjects, training DeepConvNet on Microstates timeseries
 
 '''
-
-print('==================== Start of script dcn_indep.py! ===================')
-
 import os
+import sys
+import pickle
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set_theme(style="darkgrid")
 
-import mne
-import random
-import pickle
 
 from braindecode.models import Deep4Net
 from braindecode.classifier import EEGClassifier
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 
-from sklearn.model_selection import train_test_split
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-
-# change directory go into Notebooks folder
-if os.path.basename(os.getcwd()) != 'Notebooks':
-    if os.path.basename(os.getcwd()) == 'lib':
-        os.chdir(os.path.join(os.getcwd(), '..', 'Notebooks'))
-    else:
-        os.chdir(os.path.join(os.getcwd(), 'Notebooks'))
-else:
-    # if already in Notebooks folder, do nothing
-    pass
 
 from lib import my_functions as mf
 
-# More explicit CUDA setup
+print(f'==================== Start of script {os.path.basename(__file__)}! ====================')
+
+# Explicit CUDA setup
 if torch.cuda.is_available():
     device = torch.device("cuda:0")  # Specify GPU 0 explicitly
     torch.cuda.set_device(0)
@@ -52,23 +38,30 @@ else:
     device = torch.device("cpu")
     print("CUDA not available, using CPU")
 
-# Test if tensors are actually on GPU
-test_tensor = torch.randn(10, 10).to(device)
-print(f"Test tensor device: {test_tensor.device}")
-
-# ---------------------------# Parameters ---------------------------
-excluded_from_training = [2, 12, 14, 20, 22, 23, 30, 39, 46]
-num_epochs = 100
-type_of_subject = 'independent_clean'  # 'independent' or 'adaptive'
 # ---------------------------# Load files ---------------------------
+data_path = 'Data/'
+type_of_subject = 'independent'  # 'independent' or 'adaptive'
+output_path = f'Output/ica_rest_all/{type_of_subject}/'
+input_path = 'Output/ica_rest_all/'
+# Making sure all paths exist
+if not os.path.exists(input_path):
+    os.makedirs(input_path)
+if not os.path.exists(output_path):
+    os.makedirs(output_path)
 
-data_path = '../Data/'
-output_path = '../Output/ica_rest_all/'
+# Parameters 
 do_all = False
 n_subjects = 50
+# excluded_from_training = [2, 12, 14, 20, 22, 23, 30, 39, 46]
+num_epochs = 100
 subject_list = list(range(n_subjects))
-all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all)
+all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path)
 
+
+kmeans_path = os.path.join(input_path, 'modkmeans_results', 'ms_timeseries')
+ms_timeseries_path = os.path.join(kmeans_path, 'ms_timeseries_harmonize.pkl')
+with open(ms_timeseries_path, 'rb') as f:
+    finals_ls = pickle.load(f)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

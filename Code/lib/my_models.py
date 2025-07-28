@@ -321,8 +321,19 @@ class FeatureExtractor(nn.Module):
     def setup_feature_extraction(self):
         """Setup feature extraction strategy based on model architecture"""
         
+        # Check if this is an EmbeddedMicroSNet model
+        if hasattr(self.backbone, 'microstate_embedding'):
+            print("  Detected EmbeddedMicroSNet architecture")
+            self.model_type = 'embedded_microsnet'
+            self.features = None
+            
+            # Hook before the classifier to get the features after global pooling
+            def hook_fn(module, input, output):
+                self.features = input[0]  # Get the input to classifier (features after global pool)
+            self.backbone.classifier.register_forward_hook(hook_fn)
+            
         # Check if this is a MicroSNet model (including MultiScaleMicroSNet)
-        if hasattr(self.backbone, 'classifier') and (
+        elif hasattr(self.backbone, 'classifier') and (
             hasattr(self.backbone, 'global_pool') or 
             hasattr(self.backbone, 'branch1') or
             hasattr(self.backbone, 'conv1')
@@ -409,10 +420,15 @@ class FeatureExtractor(nn.Module):
             
     def forward(self, x):
         with torch.no_grad():
-            if self.model_type == 'microsnet':
-                # For MicroSNet variants, run full forward pass and capture features via hook
+            if self.model_type in ['microsnet', 'embedded_microsnet']:
+                # For MicroSNet variants (including embedded), run full forward pass and capture features via hook
                 self.features = None
                 try:
+                    # IMPORTANT: Ensure correct data type for embedded models
+                    if self.model_type == 'embedded_microsnet':
+                        if x.dtype == torch.float32 or x.dtype == torch.float64:
+                            x = x.long()  # Convert to integer indices for embedding
+                    
                     _ = self.backbone(x)  # This triggers the hook
                     
                     if self.features is None:
@@ -438,11 +454,12 @@ class FeatureExtractor(nn.Module):
                             raise RuntimeError("Could not extract features from MicroSNet architecture")
                     
                     features = self.features
-                    print(f"    MicroSNet features shape: {features.shape}")
+                    print(f"    {self.model_type} features shape: {features.shape}")
                     return features
                     
                 except Exception as e:
-                    print(f"    Error in MicroSNet feature extraction: {e}")
+                    print(f"    Error in {self.model_type} feature extraction: {e}")
+                    print(f"    Input dtype: {x.dtype}, shape: {x.shape}")
                     raise
                 
             elif self.model_type == 'generic' and hasattr(self, 'uses_hook') and self.uses_hook:
@@ -481,7 +498,6 @@ class FeatureExtractor(nn.Module):
                     print(f"    Input shape: {x.shape}")
                     print(f"    Model architecture: {self.feature_extractor}")
                     raise
-
                 
 class MultiModalClassifier(nn.Module):
     """Classifier that takes features from multiple modalities"""
