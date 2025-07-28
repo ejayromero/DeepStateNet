@@ -1,4 +1,6 @@
+import psutil
 import os
+
 import numpy as np
 import pandas as pd
 
@@ -855,3 +857,40 @@ def set_seed(seed=42):
     random.seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+def get_memory_usage():
+    """Get current memory usage information"""
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info()
+    
+    # Get system memory info
+    system_memory = psutil.virtual_memory()
+    
+    return {
+        'process_rss_mb': memory_info.rss / 1024 / 1024,  # Resident Set Size in MB
+        'process_vms_mb': memory_info.vms / 1024 / 1024,  # Virtual Memory Size in MB
+        'system_total_gb': system_memory.total / 1024 / 1024 / 1024,  # Total system RAM in GB
+        'system_available_gb': system_memory.available / 1024 / 1024 / 1024,  # Available RAM in GB
+        'system_used_percent': system_memory.percent  # Used RAM percentage
+    }
+
+def print_memory_status(stage=""):
+    """Print current memory status"""
+    mem = get_memory_usage()
+    print(f"\n{'='*50}")
+    print(f"MEMORY STATUS {stage}")
+    print(f"{'='*50}")
+    print(f"Process Memory (RSS): {mem['process_rss_mb']:.1f} MB")
+    print(f"Process Memory (VMS): {mem['process_vms_mb']:.1f} MB")
+    print(f"System Total RAM: {mem['system_total_gb']:.1f} GB")
+    print(f"System Available RAM: {mem['system_available_gb']:.1f} GB")
+    print(f"System RAM Usage: {mem['system_used_percent']:.1f}%")
+    
+    # GPU memory if CUDA is available
+    if torch.cuda.is_available():
+        gpu_memory_allocated = torch.cuda.memory_allocated() / 1024 / 1024  # MB
+        gpu_memory_reserved = torch.cuda.memory_reserved() / 1024 / 1024    # MB
+        print(f"GPU Memory Allocated: {gpu_memory_allocated:.1f} MB")
+        print(f"GPU Memory Reserved: {gpu_memory_reserved:.1f} MB")
+    
+    print(f"{'='*50}\n")

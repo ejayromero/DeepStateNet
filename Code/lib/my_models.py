@@ -8,6 +8,10 @@ Place this file in your lib/ directory alongside my_functions.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
+
+# Your existing models (MicroSNet, MultiScaleMicroSNet, EmbeddedMicroSNet, etc.)
+# ... [keeping all your existing model classes] ...
 
 class MicroSNet(nn.Module):
     """
@@ -253,13 +257,393 @@ class EmbeddedMicroSNet(nn.Module):
         
         return x
 
+# ============== TRANSFORMER-ENHANCED MODELS ==============
+
+class PositionalEncoding(nn.Module):
+    """Enhanced positional encoding for temporal sequences"""
+    
+    def __init__(self, embedding_dim, max_len=1000, dropout=0.1):
+        super(PositionalEncoding, self).__init__()
+        
+        self.dropout = nn.Dropout(dropout)
+        
+        # Create sinusoidal positional encodings
+        pe = torch.zeros(max_len, embedding_dim)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        
+        div_term = torch.exp(torch.arange(0, embedding_dim, 2).float() * 
+                           (-math.log(10000.0) / embedding_dim))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        
+        self.register_buffer('pe', pe.unsqueeze(0))
+        
+    def forward(self, x):
+        """Add positional encoding to embeddings"""
+        seq_len = x.size(1)
+        x = x + self.pe[:, :seq_len, :]
+        return self.dropout(x)
+
+class LocalAttention(nn.Module):
+    """Local attention mechanism with sliding windows"""
+    
+    def __init__(self, embedding_dim, num_heads=4, window_size=50):
+        super(LocalAttention, self).__init__()
+        
+        self.window_size = window_size
+        self.attention = nn.MultiheadAttention(
+            embed_dim=embedding_dim,
+            num_heads=num_heads,
+            dropout=0.1,
+            batch_first=True
+        )
+        
+    def forward(self, x):
+        """
+        Apply local attention with sliding windows
+        
+        Args:
+            x: Input sequences (batch_size, seq_len, embedding_dim)
+            
+        Returns:
+            Attended sequences (batch_size, seq_len, embedding_dim)
+        """
+        batch_size, seq_len, embedding_dim = x.shape
+        
+        if seq_len <= self.window_size:
+            # If sequence is short, apply global attention
+            attended, _ = self.attention(x, x, x)
+            return attended
+        
+        # Apply sliding window attention
+        attended_segments = []
+        stride = self.window_size // 2
+        
+        for i in range(0, seq_len - self.window_size + 1, stride):
+            end_idx = min(i + self.window_size, seq_len)
+            segment = x[:, i:end_idx, :]
+            
+            attended_segment, _ = self.attention(segment, segment, segment)
+            attended_segments.append(attended_segment)
+        
+        # Reconstruct full sequence (simple averaging for overlaps)
+        result = torch.zeros_like(x)
+        counts = torch.zeros(seq_len, device=x.device)
+        
+        for i, segment in enumerate(attended_segments):
+            start_idx = i * stride
+            end_idx = start_idx + segment.shape[1]
+            result[:, start_idx:end_idx, :] += segment
+            counts[start_idx:end_idx] += 1
+            
+        # Normalize by overlap counts
+        result = result / counts.unsqueeze(0).unsqueeze(-1).clamp(min=1)
+        
+        return result
+
+class TransformerBranch(nn.Module):
+    """Transformer branch for capturing long-term dependencies"""
+    
+    def __init__(self, embedding_dim, num_layers=4, num_heads=8, dropout=0.25, output_features=128):
+        super(TransformerBranch, self).__init__()
+        
+        self.embedding_dim = embedding_dim
+        self.output_features = output_features
+        
+        # Transformer encoder layers
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embedding_dim,
+            nhead=num_heads,
+            dim_feedforward=embedding_dim * 4,
+            dropout=dropout,
+            activation='relu',
+            batch_first=True
+        )
+        
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, 
+            num_layers=num_layers
+        )
+        
+        # Global pooling strategies
+        self.global_avg_pool = nn.AdaptiveAvgPool1d(1)
+        self.global_max_pool = nn.AdaptiveMaxPool1d(1)
+        
+        # Output projection
+        self.output_projection = nn.Sequential(
+            nn.Linear(embedding_dim * 2, output_features),  # *2 for avg+max pooling
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+        
+    def forward(self, x):
+        """
+        Forward pass for transformer branch
+        
+        Args:
+            x: Embedded sequences (batch_size, seq_len, embedding_dim)
+            
+        Returns:
+            Global features (batch_size, output_features)
+        """
+        # Apply transformer encoder
+        transformer_output = self.transformer_encoder(x)  # (batch_size, seq_len, embedding_dim)
+        
+        # Transpose for pooling: (batch_size, embedding_dim, seq_len)
+        pooling_input = transformer_output.transpose(1, 2)
+        
+        # Global pooling
+        avg_pooled = self.global_avg_pool(pooling_input).squeeze(-1)  # (batch_size, embedding_dim)
+        max_pooled = self.global_max_pool(pooling_input).squeeze(-1)  # (batch_size, embedding_dim)
+        
+        # Combine pooling strategies
+        combined_pooled = torch.cat([avg_pooled, max_pooled], dim=1)  # (batch_size, embedding_dim*2)
+        
+        # Project to output features
+        output = self.output_projection(combined_pooled)
+        
+        return output
+
+class AttentionMicroSNet(nn.Module):
+    """
+    Transformer-Enhanced Hierarchical Multiscale MicroSNet
+    
+    Combines:
+    - Learnable embeddings for microstate representations
+    - Multi-scale CNNs for local temporal patterns (up to ~200ms)
+    - Transformer encoder for long-term dependencies and global context
+    - Hierarchical processing within each scale
+    
+    Optimized for 250Hz EEG with microstate sequences up to 150ms + long-term context
+    """
+    def __init__(self, n_microstates, n_classes, sequence_length=1000, 
+                 embedding_dim=64, dropout=0.25, transformer_layers=4, transformer_heads=8):
+        super(AttentionMicroSNet, self).__init__()
+        
+        self.n_microstates = n_microstates
+        self.n_classes = n_classes
+        self.embedding_dim = embedding_dim
+        self.sequence_length = sequence_length
+        
+        # Microstate embedding with enhanced initialization
+        self.microstate_embedding = nn.Embedding(n_microstates, embedding_dim)
+        
+        # Learnable positional encoding
+        self.positional_encoding = PositionalEncoding(embedding_dim, sequence_length, dropout)
+        
+        # CNN Branches for local temporal patterns (hierarchical processing)
+        
+        # Branch 1: Microstate transitions (5 points = 20ms)
+        self.transition_branch = self._create_hierarchical_branch(
+            embedding_dim, kernel_sizes=[5, 5, 5], 
+            channels=[32, 64, 96], output_features=128, dropout=dropout
+        )
+        
+        # Branch 2: Typical microstate duration (21 points = 84ms)
+        self.duration_branch = self._create_hierarchical_branch(
+            embedding_dim, kernel_sizes=[21, 15, 11], 
+            channels=[32, 64, 96], output_features=128, dropout=dropout
+        )
+        
+        # Branch 3: Extended microstate phases (41 points = 164ms)  
+        self.phase_branch = self._create_hierarchical_branch(
+            embedding_dim, kernel_sizes=[41, 25, 15],
+            channels=[32, 64, 96], output_features=128, dropout=dropout
+        )
+        
+        # Branch 4: Maximum local context (51 points = 204ms)
+        # This replaces the ultra-long 161-point kernel
+        self.context_branch = self._create_hierarchical_branch(
+            embedding_dim, kernel_sizes=[51, 31, 19],
+            channels=[32, 64, 96], output_features=128, dropout=dropout
+        )
+        
+        # Transformer branch for long-term dependencies and global context
+        self.transformer_branch = TransformerBranch(
+            embedding_dim, transformer_layers, transformer_heads, 
+            dropout, output_features=128
+        )
+        
+        # Optional: Local attention for within-segment dependencies
+        self.local_attention = LocalAttention(embedding_dim, num_heads=4, window_size=50)
+        self.local_attention_proj = nn.Sequential(
+            nn.Linear(embedding_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+        
+        # Feature fusion and classification
+        total_features = 128 * 6  # 4 CNN branches + 1 transformer + 1 local attention
+        
+        self.feature_fusion = nn.Sequential(
+            nn.Linear(total_features, 512),
+            nn.ReLU(),
+            nn.BatchNorm1d(512),
+            nn.Dropout(0.5)
+        )
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.BatchNorm1d(256),
+            nn.Dropout(0.4),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(128, n_classes),
+            nn.LogSoftmax(dim=1)
+        )
+        
+        self._initialize_weights()
+        
+    def _create_hierarchical_branch(self, input_dim, kernel_sizes, channels, output_features, dropout):
+        """Create a hierarchical temporal processing branch"""
+        layers = []
+        in_channels = input_dim
+        
+        for i, (kernel_size, out_channels) in enumerate(zip(kernel_sizes, channels)):
+            layers.extend([
+                nn.Conv1d(in_channels, out_channels, kernel_size=kernel_size, 
+                         padding=kernel_size//2),
+                nn.BatchNorm1d(out_channels),
+                nn.ReLU(),
+                nn.MaxPool1d(2, stride=2) if i < len(kernel_sizes) - 1 else nn.Identity(),
+                nn.Dropout(dropout)
+            ])
+            in_channels = out_channels
+            
+        # Final projection to desired output size
+        layers.extend([
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Linear(channels[-1], output_features),
+            nn.ReLU()
+        ])
+        
+        return nn.Sequential(*layers)
+        
+    def _initialize_weights(self):
+        """Initialize model weights"""
+        # Initialize microstate embeddings
+        nn.init.normal_(self.microstate_embedding.weight, mean=0.0, std=0.1)
+        
+        # Initialize linear layers
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+                    
+    def forward(self, x):
+        """
+        Forward pass
+        
+        Args:
+            x: Categorical microstate sequences (batch_size, sequence_length)
+            
+        Returns:
+            Classification logits (batch_size, n_classes)
+        """
+        batch_size, seq_len = x.shape
+        
+        # Embed microstate sequences
+        embedded = self.microstate_embedding(x)  # (batch_size, seq_len, embedding_dim)
+        
+        # Add positional encoding
+        embedded = self.positional_encoding(embedded)
+        
+        # Prepare for CNN processing: (batch_size, embedding_dim, seq_len)
+        cnn_input = embedded.transpose(1, 2)
+        
+        # Process local temporal patterns with hierarchical CNNs
+        x1 = self.transition_branch(cnn_input)    # Transitions: (batch_size, 128)
+        x2 = self.duration_branch(cnn_input)      # Durations: (batch_size, 128)  
+        x3 = self.phase_branch(cnn_input)         # Phases: (batch_size, 128)
+        x4 = self.context_branch(cnn_input)       # Local context: (batch_size, 128)
+        
+        # Process long-term dependencies with transformer
+        x5 = self.transformer_branch(embedded)    # Global context: (batch_size, 128)
+        
+        # Process local attention patterns
+        x6_attended = self.local_attention(embedded)  # (batch_size, seq_len, embedding_dim)
+        x6 = self.local_attention_proj(torch.mean(x6_attended, dim=1))  # (batch_size, 128)
+        
+        # Concatenate all features
+        combined_features = torch.cat([x1, x2, x3, x4, x5, x6], dim=1)  # (batch_size, 768)
+        
+        # Feature fusion and classification
+        fused_features = self.feature_fusion(combined_features)
+        output = self.classifier(fused_features)
+        
+        return output
+
+class LightweightAttentionMicroSNet(nn.Module):
+    """Lightweight version with fewer parameters for faster training"""
+    
+    def __init__(self, n_microstates, n_classes, sequence_length=1000, 
+                 embedding_dim=32, dropout=0.25):
+        super(LightweightAttentionMicroSNet, self).__init__()
+
+        self.microstate_embedding = nn.Embedding(n_microstates, embedding_dim)
+        self.positional_encoding = PositionalEncoding(embedding_dim, sequence_length, dropout)
+        
+        # Simplified CNN branches
+        self.local_cnn = nn.Sequential(
+            nn.Conv1d(embedding_dim, 64, kernel_size=21, padding=10),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.MaxPool1d(2, stride=2),
+            nn.Dropout(dropout),
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Linear(64, 128)
+        )
+        
+        # Lightweight transformer
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embedding_dim, nhead=4, dim_feedforward=embedding_dim*2,
+            dropout=dropout, batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2)
+        self.transformer_proj = nn.Sequential(
+            nn.Linear(embedding_dim, 128),
+            nn.ReLU()
+        )
+        
+        # Classification
+        self.classifier = nn.Sequential(
+            nn.Linear(256, 128),  # 128 CNN + 128 transformer
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(128, n_classes),
+            nn.LogSoftmax(dim=1)
+        )
+        
+    def forward(self, x):
+        embedded = self.positional_encoding(self.microstate_embedding(x))
+        
+        # CNN branch
+        cnn_out = self.local_cnn(embedded.transpose(1, 2))
+        
+        # Transformer branch  
+        transformer_out = self.transformer(embedded)
+        transformer_pooled = torch.mean(transformer_out, dim=1)
+        transformer_features = self.transformer_proj(transformer_pooled)
+        
+        # Combine and classify
+        combined = torch.cat([cnn_out, transformer_features], dim=1)
+        return self.classifier(combined)
+
+# Keep all your existing model classes (FeatureExtractor, MultiModalClassifier, etc.)
+# ... [rest of your existing classes] ...
 
 def get_model(model_name, n_microstates, n_classes, sequence_length, **kwargs):
     """
     Factory function to create models
     
     Args:
-        model_name: str - 'microsnet', 'multiscale_microsnet', or 'embedded_microsnet'
+        model_name: str - model identifier
         n_microstates: int - number of microstate categories
         n_classes: int - number of output classes
         sequence_length: int - length of input sequences
@@ -268,18 +652,25 @@ def get_model(model_name, n_microstates, n_classes, sequence_length, **kwargs):
     Returns:
         model: nn.Module instance
     """
-    if model_name.lower() == 'microsnet':
+    model_name = model_name.lower()
+    
+    if model_name == 'microsnet':
         return MicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name.lower() == 'multiscale_microsnet':
+    elif model_name == 'multiscale_microsnet':
         return MultiScaleMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name.lower() == 'embedded_microsnet':
+    elif model_name == 'embedded_microsnet':
         return EmbeddedMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
+    elif model_name == 'attention_microsnet':
+        return AttentionMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
+    elif model_name == 'lightweight_attention_microsnet':
+        return LightweightAttentionMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
     else:
         raise ValueError(f"Unknown model name: {model_name}. "
-                        f"Available models: 'microsnet', 'multiscale_microsnet', 'embedded_microsnet'")
+                        f"Available models: 'microsnet', 'multiscale_microsnet', 'embedded_microsnet', "
+                        f"'attention_microsnet', 'lightweight_attention_microsnet'")
 
 
-# Model information dictionary
+# Updated model information dictionary
 MODEL_INFO = {
     'microsnet': {
         'description': 'Simple temporal CNN for one-hot encoded microstate sequences',
@@ -295,414 +686,21 @@ MODEL_INFO = {
         'description': 'Embedding-based CNN for categorical microstate sequences',
         'input_format': 'categorical',
         'input_shape': '(batch_size, sequence_length)'
+    },
+    'attention_microsnet': {
+        'description': 'Transformer-enhanced hierarchical multiscale CNN with attention mechanisms',
+        'input_format': 'categorical',
+        'input_shape': '(batch_size, sequence_length)',
+        'features': 'Hierarchical CNNs + Transformer + Local Attention',
+        'temporal_scales': [20, 84, 164, 204, 'global_transformer', 'local_attention'],
+        'complexity': 'High'
+    },
+    'lightweight_attention_microsnet': {
+        'description': 'Simplified CNN + transformer for faster training',
+        'input_format': 'categorical',
+        'input_shape': '(batch_size, sequence_length)',
+        'features': 'CNN + Lightweight Transformer',
+        'temporal_scales': [84, 'global_transformer'],
+        'complexity': 'Medium'
     }
 }
-
-class FeatureExtractor(nn.Module):
-    """Extracts features from pre-trained models by intercepting before the final classifier"""
-    
-    def __init__(self, pretrained_model):
-        super().__init__()
-        self.pretrained_model = pretrained_model
-        
-        # Get the backbone model
-        if hasattr(pretrained_model, 'module'):
-            self.backbone = pretrained_model.module
-        else:
-            self.backbone = pretrained_model
-            
-        # Freeze all parameters
-        for param in self.backbone.parameters():
-            param.requires_grad = False
-        
-        # Set up feature extraction based on model type
-        self.setup_feature_extraction()
-            
-    def setup_feature_extraction(self):
-        """Setup feature extraction strategy based on model architecture"""
-        
-        # Check if this is an EmbeddedMicroSNet model
-        if hasattr(self.backbone, 'microstate_embedding'):
-            print("  Detected EmbeddedMicroSNet architecture")
-            self.model_type = 'embedded_microsnet'
-            self.features = None
-            
-            # Hook before the classifier to get the features after global pooling
-            def hook_fn(module, input, output):
-                self.features = input[0]  # Get the input to classifier (features after global pool)
-            self.backbone.classifier.register_forward_hook(hook_fn)
-            
-        # Check if this is a MicroSNet model (including MultiScaleMicroSNet)
-        elif hasattr(self.backbone, 'classifier') and (
-            hasattr(self.backbone, 'global_pool') or 
-            hasattr(self.backbone, 'branch1') or
-            hasattr(self.backbone, 'conv1')
-        ):
-            print("  Detected MicroSNet-based architecture")
-            self.model_type = 'microsnet'
-            
-            # For MicroSNet variants, we want features before the classifier
-            self.features = None
-            
-            # Try to find the right place to hook
-            if hasattr(self.backbone, 'global_pool'):
-                # Original MicroSNet
-                def hook_fn(module, input, output):
-                    self.features = output.squeeze(-1) if len(output.shape) > 2 else output
-                self.backbone.global_pool.register_forward_hook(hook_fn)
-                
-            elif hasattr(self.backbone, 'branch1'):
-                # MultiScaleMicroSNet - hook before classifier
-                def hook_fn(module, input, output):
-                    self.features = input[0]  # Get the input to classifier (concatenated features)
-                self.backbone.classifier.register_forward_hook(hook_fn)
-                
-            else:
-                # Fallback: try to hook the layer before classifier
-                layers = list(self.backbone.children())
-                if len(layers) >= 2:
-                    pre_classifier_layer = layers[-2]  # Second to last layer
-                    def hook_fn(module, input, output):
-                        if isinstance(output, torch.Tensor):
-                            self.features = output.flatten(1) if len(output.shape) > 2 else output
-                        else:
-                            self.features = output
-                    pre_classifier_layer.register_forward_hook(hook_fn)
-            
-        elif hasattr(self.backbone, 'final_layer') or 'Deep4Net' in str(type(self.backbone)):
-            print("  Detected Deep4Net architecture")
-            self.model_type = 'deep4net'
-            
-            # For Deep4Net, remove the final classification layer
-            if hasattr(self.backbone, 'final_layer'):
-                modules = list(self.backbone.children())[:-1]
-            else:
-                modules = list(self.backbone.children())[:-1]
-            
-            self.feature_extractor = nn.Sequential(*modules)
-            
-        else:
-            print("  Unknown architecture, attempting improved generic approach")
-            self.model_type = 'generic'
-            
-            # Improved generic approach: try to find classifier and extract features before it
-            if hasattr(self.backbone, 'classifier'):
-                # If there's a classifier, we need to extract features before it
-                self.features = None
-                
-                def hook_fn(module, input, output):
-                    # Capture input to classifier as features
-                    self.features = input[0] if isinstance(input, tuple) else input
-                
-                self.backbone.classifier.register_forward_hook(hook_fn)
-                self.uses_hook = True
-            else:
-                # Fallback: remove last layer
-                modules = list(self.backbone.children())[:-1]
-                if len(modules) == 0:
-                    # If removing last layer results in empty model, keep all but final linear layer
-                    all_modules = []
-                    for module in self.backbone.modules():
-                        if isinstance(module, nn.Linear) and module.out_features == getattr(self.backbone, 'n_classes', None):
-                            break  # Stop before the final classification layer
-                        if module != self.backbone:  # Don't include the root module
-                            all_modules.append(module)
-                    
-                    if all_modules:
-                        self.feature_extractor = nn.Sequential(*all_modules)
-                    else:
-                        # Ultimate fallback: use the full model and extract penultimate layer features
-                        self.feature_extractor = self.backbone
-                else:
-                    self.feature_extractor = nn.Sequential(*modules)
-                
-                self.uses_hook = False
-            
-    def forward(self, x):
-        with torch.no_grad():
-            if self.model_type in ['microsnet', 'embedded_microsnet']:
-                # For MicroSNet variants (including embedded), run full forward pass and capture features via hook
-                self.features = None
-                try:
-                    # IMPORTANT: Ensure correct data type for embedded models
-                    if self.model_type == 'embedded_microsnet':
-                        if x.dtype == torch.float32 or x.dtype == torch.float64:
-                            x = x.long()  # Convert to integer indices for embedding
-                    
-                    _ = self.backbone(x)  # This triggers the hook
-                    
-                    if self.features is None:
-                        # Fallback: manually extract features
-                        print("    Hook failed, attempting manual feature extraction")
-                        if hasattr(self.backbone, 'classifier'):
-                            # Run all layers except classifier
-                            features = x
-                            for name, module in self.backbone.named_children():
-                                if name != 'classifier':
-                                    features = module(features)
-                            
-                            # Handle different output shapes
-                            if len(features.shape) > 2:
-                                if hasattr(features, 'squeeze') and features.shape[-1] == 1:
-                                    features = features.squeeze(-1)
-                                else:
-                                    # Apply global average pooling
-                                    features = F.adaptive_avg_pool1d(features, 1).squeeze(-1)
-                            
-                            self.features = features
-                        else:
-                            raise RuntimeError("Could not extract features from MicroSNet architecture")
-                    
-                    features = self.features
-                    print(f"    {self.model_type} features shape: {features.shape}")
-                    return features
-                    
-                except Exception as e:
-                    print(f"    Error in {self.model_type} feature extraction: {e}")
-                    print(f"    Input dtype: {x.dtype}, shape: {x.shape}")
-                    raise
-                
-            elif self.model_type == 'generic' and hasattr(self, 'uses_hook') and self.uses_hook:
-                # Generic model with hook
-                self.features = None
-                _ = self.backbone(x)
-                
-                if self.features is None:
-                    raise RuntimeError("Failed to capture features via hook")
-                
-                features = self.features
-                if len(features.shape) > 2:
-                    features = features.flatten(1)
-                
-                print(f"    Generic (hook) features shape: {features.shape}")
-                return features
-                
-            else:
-                # For other models, use the feature extractor
-                try:
-                    features = self.feature_extractor(x)
-                    
-                    # Handle different output shapes
-                    if len(features.shape) > 2:
-                        # Apply global pooling if needed
-                        if features.shape[-1] > 1:  # Has time dimension
-                            features = F.adaptive_avg_pool1d(features.flatten(1, -2), 1).squeeze(-1)
-                        else:
-                            features = features.flatten(1)
-                    
-                    print(f"    {self.model_type} features shape: {features.shape}")
-                    return features
-                    
-                except Exception as e:
-                    print(f"    Error in {self.model_type} feature extraction: {e}")
-                    print(f"    Input shape: {x.shape}")
-                    print(f"    Model architecture: {self.feature_extractor}")
-                    raise
-                
-class MultiModalClassifier(nn.Module):
-    """Classifier that takes features from multiple modalities"""
-    
-    def __init__(self, raw_feature_dim, ms_feature_dim, n_classes, dropout=0.5):
-        super().__init__()
-        
-        self.raw_feature_dim = raw_feature_dim
-        self.ms_feature_dim = ms_feature_dim
-        self.n_classes = n_classes
-        
-        # Feature fusion layer
-        total_features = raw_feature_dim + ms_feature_dim
-        
-        self.classifier = nn.Sequential(
-            nn.Linear(total_features, 512),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(256, n_classes)
-        )
-        
-    def forward(self, raw_features, ms_features):
-        # Concatenate features from both modalities
-        combined_features = torch.cat([raw_features, ms_features], dim=1)
-        return self.classifier(combined_features)
-
-class HierarchicalMultiScaleMicroSNet(nn.Module):
-    """
-    Hybrid approach: Combines Deep4Net's hierarchical processing 
-    with multiscale kernel strategy for microstate sequences
-    
-    Uses both parallel multiscale AND hierarchical deepening
-    """
-    def __init__(self, n_microstates, n_classes, sequence_length=1000, dropout=0.25):
-        super(HierarchicalMultiScaleMicroSNet, self).__init__()
-        
-        self.n_microstates = n_microstates
-        self.n_classes = n_classes
-        
-        # Branch 1: Transitions scale (like Deep4Net but focused on transitions)
-        self.branch1 = nn.Sequential(
-            # Layer 1: Transition detection
-            nn.Conv1d(n_microstates, 32, kernel_size=5, padding=2),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.MaxPool1d(2, stride=2),
-            nn.Dropout(dropout),
-            
-            # Layer 2: Transition patterns  
-            nn.Conv1d(32, 64, kernel_size=5, padding=2),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.MaxPool1d(2, stride=2),
-            nn.Dropout(dropout),
-            
-            # Layer 3: Complex transition dynamics
-            nn.Conv1d(64, 128, kernel_size=5, padding=2),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool1d(1)
-        )
-        
-        # Branch 2: Typical duration scale (hierarchical processing)
-        self.branch2 = nn.Sequential(
-            # Layer 1: Basic microstate patterns
-            nn.Conv1d(n_microstates, 32, kernel_size=21, padding=10),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.MaxPool1d(2, stride=2),
-            nn.Dropout(dropout),
-            
-            # Layer 2: Duration patterns
-            nn.Conv1d(32, 64, kernel_size=21, padding=10),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.MaxPool1d(2, stride=2),
-            nn.Dropout(dropout),
-            
-            # Layer 3: Complex duration dynamics  
-            nn.Conv1d(64, 128, kernel_size=21, padding=10),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool1d(1)
-        )
-        
-        # Branch 3: Extended phases scale
-        self.branch3 = nn.Sequential(
-            nn.Conv1d(n_microstates, 32, kernel_size=41, padding=20),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.MaxPool1d(2, stride=2),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(32, 64, kernel_size=41, padding=20),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.MaxPool1d(2, stride=2),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(64, 128, kernel_size=41, padding=20),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool1d(1)
-        )
-        
-        # Branch 4: Long-range context (Deep4Net style depth)
-        self.branch4 = nn.Sequential(
-            nn.Conv1d(n_microstates, 32, kernel_size=81, padding=40),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.MaxPool1d(3, stride=3),  # More aggressive pooling for long sequences
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(32, 64, kernel_size=27, padding=13),  # Smaller kernel after pooling
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.MaxPool1d(3, stride=3),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(64, 128, kernel_size=9, padding=4),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool1d(1)
-        )
-        
-        # Deep4Net-style classification with progressive complexity
-        self.classifier = nn.Sequential(
-            nn.Linear(128 * 4, 512),  # Same as Deep4Net approach
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(512, 256),
-            nn.ReLU(), 
-            nn.Dropout(0.5),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(128, n_classes),
-            nn.LogSoftmax(dim=1)
-        )
-        
-    def forward(self, x):
-        """
-        Hierarchical multiscale forward pass
-        Each branch processes its scale hierarchically (like Deep4Net)
-        Then all scales are fused (like multiscale networks)
-        """
-        # Process each scale with hierarchical depth
-        x1 = self.branch1(x).squeeze(-1)  # Transition hierarchy: (batch_size, 128)
-        x2 = self.branch2(x).squeeze(-1)  # Duration hierarchy: (batch_size, 128)  
-        x3 = self.branch3(x).squeeze(-1)  # Phase hierarchy: (batch_size, 128)
-        x4 = self.branch4(x).squeeze(-1)  # Context hierarchy: (batch_size, 128)
-        
-        # Late fusion of all temporal scales
-        x = torch.cat([x1, x2, x3, x4], dim=1)  # (batch_size, 512)
-        
-        # Deep4Net-style classification
-        x = self.classifier(x)
-        
-        return x
-
-# Performance comparison utility
-class ModelComparison:
-    """Utility to compare different microstate network architectures"""
-    
-    @staticmethod
-    def get_model_info():
-        return {
-            'Deep4Net': {
-                'type': 'Sequential Hierarchical',
-                'features': '25+25+50+100+200 = ~400',
-                'scales': 'Implicit (through pooling)',
-                'best_for': 'Raw EEG with spatial-temporal patterns',
-                'complexity': 'High'
-            },
-            'OptimizedMultiScaleMicroSNet': {
-                'type': 'Parallel Multiscale', 
-                'features': '4×128 = 512',
-                'scales': 'Explicit (5,21,41,81 kernels)',
-                'best_for': 'Microstate sequences with known temporal scales',
-                'complexity': 'Medium'
-            },
-            'HierarchicalMultiScaleMicroSNet': {
-                'type': 'Hierarchical + Multiscale Hybrid',
-                'features': '4×128 = 512', 
-                'scales': 'Both explicit kernels AND hierarchical depth',
-                'best_for': 'Complex microstate dynamics with multiple temporal scales',
-                'complexity': 'High'
-            }
-        }
-    
-    @staticmethod
-    def recommend_model(data_type, complexity_preference='medium'):
-        """Recommend best model based on data and preferences"""
-        
-        if data_type == 'raw_eeg':
-            return 'Deep4Net'
-        elif data_type == 'microstate_sequences':
-            if complexity_preference == 'low':
-                return 'OptimizedMultiScaleMicroSNet'
-            elif complexity_preference == 'high':
-                return 'HierarchicalMultiScaleMicroSNet' 
-            else:
-                return 'OptimizedMultiScaleMicroSNet'
-        else:
-            return 'Deep4Net'  # Default fallback

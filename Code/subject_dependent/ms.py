@@ -2,6 +2,7 @@
 Script to train MicroSNet on Microstates timeseries
 '''
 import os
+import gc
 import sys
 import numpy as np
 import pandas as pd
@@ -33,11 +34,11 @@ if torch.cuda.is_available():
 else:
     device = torch.device("cpu")
     print("CUDA not available, using CPU")
-
+mf.print_memory_status("- INITIAL STARTUP")
 # ---------------------------# Load files ---------------------------
 data_path = 'Data/'
 type_of_subject = 'dependent'  # or 'dep' for dependent subjects
-model_name = 'embedded_microsnet'  # 'microsnet' or 'multiscale_microsnet'
+model_name = 'attention_microsnet'  # 'microsnet' or 'multiscale_microsnet'
 output_path = f'Output/ica_rest_all/{type_of_subject}/'
 input_path = 'Output/ica_rest_all/'
 # Making sure all paths exist
@@ -53,7 +54,8 @@ num_epochs = 50
 batch_size = 32  # or 256 if memory allows
 subject_list = list(range(n_subjects))
 all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path)
-
+mf.print_memory_status("- AFTER DATA LOADING") 
+del all_data # Free memory after loading data
 if 'embedded' in model_name:
     kmeans_path = os.path.join(input_path, 'modkmeans_results', 'modkmeans_sequence')
     ms_timeseries_path = os.path.join(kmeans_path, 'modkmeans_sequence_indiv.pkl')
@@ -64,7 +66,6 @@ with open(ms_timeseries_path, 'rb') as f:
     finals_ls = pickle.load(f)
 
 mf.set_seed(42)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 if n_subjects == 1:
     test_subjects = [0]
@@ -73,8 +74,13 @@ else:
     
 output_file = os.path.join(output_path, f'{type_of_subject}_ms_{model_name}_results_ica_rest_all.npy')
 
+gc.collect()
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+mf.print_memory_status("- AFTER GARBAGE COLLECTION")
 # ---------- Loop Through Subjects ----------
 for id in range(n_subjects):
+    mf.print_memory_status(f"- SUBJECT {id} START")  # Optional: at start of each subject
     print(f"\n▶ Training Subject {id}")
     if os.path.exists(output_file):
         results = np.load(output_file, allow_pickle=True).item()
@@ -100,8 +106,14 @@ for id in range(n_subjects):
     # Keep original data handling - using finals_ls instead of all_data
     x = torch.tensor(finals_ls[id], dtype=torch.float32)
 
-    if 'embedded' in model_name:
-        # For EmbeddedMicroSNet: use only the microstate sequences (first channel)
+    # Even better approach - replace the data handling section in ms.py with:
+
+    # Check if model uses categorical or one-hot input format
+    model_info = mm.MODEL_INFO.get(model_name, {})
+    input_format = model_info.get('input_format', 'one_hot')
+
+    if input_format == 'categorical':
+        # For models that use categorical input (embedded_microsnet, attention models)
         x_microstates = x[:, 0, :].long()  # Shape: (batch_size, sequence_length)
         
         # Handle negative indices (embedding layers require indices >= 0)
@@ -115,12 +127,12 @@ for id in range(n_subjects):
         n_microstates = int(torch.max(x).item()) + 1
         sequence_length = x.shape[1]  # For categorical data: (batch_size, sequence_length)
         
-        print(f"Using microstate sequences only for {model_name}")
+        print(f"Using categorical microstate sequences for {model_name}")
         print(f"Microstate data shape: {x.shape}")
         print(f"Microstate range: {torch.min(x).item()} to {torch.max(x).item()}")
-        
+
     else:
-        # For other models: convert microstate sequences to one-hot encoding
+        # For models that use one-hot input (microsnet, multiscale_microsnet)
         x_microstates = x[:, 0, :].long()  # Extract microstate sequences
         
         # Handle negative indices
@@ -137,7 +149,7 @@ for id in range(n_subjects):
         x_onehot.scatter_(1, x_microstates.unsqueeze(1), 1)
         x = x_onehot
         
-        print(f"Converted microstate sequences to one-hot for {model_name}")
+        print(f"Using one-hot encoded microstate sequences for {model_name}")
         print(f"One-hot data shape: {x.shape}")
 
     y = torch.tensor(all_y[id], dtype=torch.long)
@@ -165,13 +177,26 @@ for id in range(n_subjects):
     n_classes = len(torch.unique(y))
     
     # Create model using factory function
-    model = mm.get_model(
-        model_name=model_name,
-        n_microstates=n_microstates,
-        n_classes=n_classes,
-        sequence_length=sequence_length,
-        dropout=0.25
-    )
+    if 'attention' in model_name:
+        model = mm.get_model(
+            model_name=model_name,
+            n_microstates=n_microstates,
+            n_classes=n_classes,
+            sequence_length=sequence_length,
+            dropout=0.25,
+            embedding_dim=64,           # New parameter
+            transformer_layers=4,       # New parameter  
+            transformer_heads=8         # New parameter
+        )
+    else:
+        # For other models, use the original parameters
+        model = mm.get_model(
+            model_name=model_name,
+            n_microstates=n_microstates,
+            n_classes=n_classes,
+            sequence_length=sequence_length,
+            dropout=0.25
+        )
     
     model = model.to(device)
     criterion = nn.NLLLoss()
@@ -266,6 +291,10 @@ for id in range(n_subjects):
     np.save(output_file, results)
     print(f"Results saved to {output_file}")
     print(f"✅ Subject {id} processed successfully.\n\n")
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    mf.print_memory_status(f"- SUBJECT {id} END")
 
 # ---------- Summary Results ----------
 print(f"\n🎯 Overall Results:")
