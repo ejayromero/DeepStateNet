@@ -1,38 +1,38 @@
 #!/bin/bash
 # quick_jobs.sh - Individual job submission helper
-# For when you want to run specific experiments only
+# Updated for conda environment (myvenv) and correct folder structure
 
 # Make the main scheduler executable
 chmod +x tmux_scheduler.sh
 
 case "${1:-}" in
     "dependent")
-        echo "🧠 Submitting DEPENDENT experiment..."
-        ./tmux_scheduler.sh submit dependent/ms.py "dependent_experiment" .venv
+        echo "Submitting SUBJECT DEPENDENT experiment..."
+        ./tmux_scheduler.sh submit subject_dependent/ms.py "subject_dependent_experiment" myvenv
         echo "Start worker with: nohup ./tmux_scheduler.sh worker 1 > worker.log 2>&1 &"
         ;;
     "independent")
-        echo "🧠 Submitting INDEPENDENT experiment..."
-        ./tmux_scheduler.sh submit independent/ms_indep.py "independent_experiment" .venv
+        echo "Submitting SUBJECT INDEPENDENT experiment..."
+        ./tmux_scheduler.sh submit subject_independent/ms_indep.py "subject_independent_experiment" myvenv
         echo "Start worker with: nohup ./tmux_scheduler.sh worker 1 > worker.log 2>&1 &"
         ;;
     "adaptive")
-        echo "🧠 Submitting ADAPTIVE experiment..."
-        ./tmux_scheduler.sh submit adaptive/ms_adapt.py "adaptive_experiment" .venv
+        echo "Submitting SUBJECT ADAPTIVE experiment..."
+        ./tmux_scheduler.sh submit subject_adaptive/ms_adapt.py "subject_adaptive_experiment" myvenv
         echo "Start worker with: nohup ./tmux_scheduler.sh worker 1 > worker.log 2>&1 &"
         ;;
     "all-sequential")
-        echo "🧠 Submitting ALL experiments (sequential - one after another)..."
-        ./tmux_scheduler.sh submit dependent/ms.py "dependent_seq" .venv
-        ./tmux_scheduler.sh submit independent/ms_indep.py "independent_seq" .venv
-        ./tmux_scheduler.sh submit adaptive/ms_adapt.py "adaptive_seq" .venv
+        echo "Submitting ALL experiments (sequential - one after another)..."
+        ./tmux_scheduler.sh submit subject_dependent/ms.py "subject_dependent_seq" myvenv
+        ./tmux_scheduler.sh submit subject_independent/ms_indep.py "subject_independent_seq" myvenv
+        ./tmux_scheduler.sh submit subject_adaptive/ms_adapt.py "subject_adaptive_seq" myvenv
         echo "Start worker with: nohup ./tmux_scheduler.sh worker 1 > worker.log 2>&1 &"
         ;;
     "all-parallel")
-        echo "🧠 Submitting ALL experiments (parallel - all at once)..."
-        ./tmux_scheduler.sh submit dependent/ms.py "dependent_par" .venv
-        ./tmux_scheduler.sh submit independent/ms_indep.py "independent_par" .venv
-        ./tmux_scheduler.sh submit adaptive/ms_adapt.py "adaptive_par" .venv
+        echo "Submitting ALL experiments (parallel - all at once)..."
+        ./tmux_scheduler.sh submit subject_dependent/ms.py "subject_dependent_par" myvenv
+        ./tmux_scheduler.sh submit subject_independent/ms_indep.py "subject_independent_par" myvenv
+        ./tmux_scheduler.sh submit subject_adaptive/ms_adapt.py "subject_adaptive_par" myvenv
         echo "Start worker with: nohup ./tmux_scheduler.sh worker 3 > worker.log 2>&1 &"
         ;;
     "status")
@@ -42,14 +42,15 @@ case "${1:-}" in
         ./tmux_scheduler.sh queue
         ;;
     *)
-        echo "🧠 Quick job submission for microstate experiments"
+        echo "Quick job submission for microstate experiments"
+        echo "Updated for conda environment 'myvenv'"
         echo ""
         echo "Usage: $0 [OPTION]"
         echo ""
         echo "Individual experiments:"
-        echo "  $0 dependent      # Submit only dependent experiment"
-        echo "  $0 independent    # Submit only independent experiment"
-        echo "  $0 adaptive       # Submit only adaptive experiment"
+        echo "  $0 dependent      # Submit only subject_dependent experiment"
+        echo "  $0 independent    # Submit only subject_independent experiment"
+        echo "  $0 adaptive       # Submit only subject_adaptive experiment"
         echo ""
         echo "Multiple experiments:"
         echo "  $0 all-sequential # Submit all (run one after another)"
@@ -67,5 +68,8 @@ case "${1:-}" in
         echo "  ./tmux_scheduler.sh status"
         echo "  ./tmux_scheduler.sh monitor JOB_NAME"
         echo "  ./tmux_scheduler.sh logs JOB_NAME"
+        echo ""
+        echo "Environment: Uses conda environment 'myvenv'"
+        echo "Requirements: Python 3.11 with torch, numpy, pandas, matplotlib, seaborn, scikit-learn"
         ;;
 esac

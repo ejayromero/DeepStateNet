@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # tmux_scheduler.sh - A SLURM-like job scheduler using tmux
-# Usage: ./tmux_scheduler.sh [command] [options]
+# Updated for conda environment support
 # Safe for shared servers - uses only user space, no sudo required
 
 set -e  # Exit on any error
@@ -47,7 +47,7 @@ COMMANDS:
     set-parallel N                               Set default parallel job limit
 
 ENVIRONMENT SUPPORT:
-    Conda:       ./tmux_scheduler.sh submit ms.py "job1" my_conda_env
+    Conda:       ./tmux_scheduler.sh submit ms.py "job1" myvenv
     Python venv: ./tmux_scheduler.sh submit ms.py "job1" .venv
     Custom venv: ./tmux_scheduler.sh submit ms.py "job1" /path/to/my_venv
     No env:      ./tmux_scheduler.sh submit ms.py "job1"
@@ -58,15 +58,15 @@ PARALLEL EXECUTION:
     worker 4         # Up to 4 jobs in parallel
 
 GPU SUPPORT:
-    submit dependent/ms.py "job1" .venv 0     # Use GPU 0
-    submit independent/ms_indep.py "job2" .venv 1     # Use GPU 1
-    submit adaptive/ms_adapt.py "job3" .venv       # Auto-assign GPU or use CPU
+    submit subject_dependent/ms.py "job1" myvenv 0     # Use GPU 0
+    submit subject_independent/ms_indep.py "job2" myvenv 1     # Use GPU 1
+    submit subject_adaptive/ms_adapt.py "job3" myvenv       # Auto-assign GPU or use CPU
 
 EXAMPLES FOR YOUR SETUP:
     # Submit your three experiments
-    ./tmux_scheduler.sh submit dependent/ms.py "dependent_exp" .venv
-    ./tmux_scheduler.sh submit independent/ms_indep.py "independent_exp" .venv
-    ./tmux_scheduler.sh submit adaptive/ms_adapt.py "adaptive_exp" .venv
+    ./tmux_scheduler.sh submit subject_dependent/ms.py "dependent_exp" myvenv
+    ./tmux_scheduler.sh submit subject_independent/ms_indep.py "independent_exp" myvenv
+    ./tmux_scheduler.sh submit subject_adaptive/ms_adapt.py "adaptive_exp" myvenv
 
     # Start worker with 3 parallel jobs
     nohup ./tmux_scheduler.sh worker 3 > worker.log 2>&1 &
@@ -201,25 +201,24 @@ execute_job() {
         if [[ "$env_name" == .venv* ]] || [[ "$env_name" == */.venv* ]]; then
             # Handle .venv (Python virtual environment)
             if [[ "$env_name" == ".venv" ]]; then
-                # Relative path from script directory
                 venv_path="$SCRIPT_DIR/.venv"
             else
-                # Absolute or custom path
                 venv_path="$env_name"
             fi
-            
             tmux send-keys -t "$session_name" "source $venv_path/bin/activate" Enter
             log_message "Activated Python venv: $venv_path"
         else
             # Handle conda environment
+            tmux send-keys -t "$session_name" "source ~/miniconda3/bin/activate" Enter
+            sleep 2
             tmux send-keys -t "$session_name" "conda activate $env_name" Enter
             log_message "Activated conda env: $env_name"
         fi
-        sleep 2
+        sleep 3
     fi
     
     # Create the command to run
-    local run_command="python $script_name 2>&1 | tee $log_file"
+    local run_command="python3 $script_name 2>&1 | tee $log_file"
     
     # Send the command
     tmux send-keys -t "$session_name" "$run_command" Enter
@@ -271,7 +270,7 @@ update_job_status() {
 # Show job status
 show_status() {
     echo -e "\n${BLUE}=== JOB STATUS ===${NC}"
-    printf "%-20s %-15s %-10s %-5s %-20s\n" "JOB_NAME" "STATUS" "JOB_ID" "GPU" "LAST_UPDATE"
+    printf "%-25s %-15s %-10s %-5s %-20s\n" "JOB_NAME" "STATUS" "JOB_ID" "GPU" "LAST_UPDATE"
     echo "--------------------------------------------------------------------------------"
     
     if [[ -s "$STATUS_FILE" ]]; then
@@ -284,7 +283,7 @@ show_status() {
                 *) color="$NC" ;;
             esac
             gpu_display="${gpu_id:-"-"}"
-            printf "%-20s ${color}%-15s${NC} %-10s %-5s %-20s\n" "$job_name" "$status" "${job_id##*_}" "$gpu_display" "$last_update"
+            printf "%-25s ${color}%-15s${NC} %-10s %-5s %-20s\n" "$job_name" "$status" "${job_id##*_}" "$gpu_display" "$last_update"
         done < "$STATUS_FILE"
     else
         echo "No jobs found."
@@ -295,14 +294,14 @@ show_status() {
 # Show queue
 show_queue() {
     echo -e "\n${BLUE}=== JOB QUEUE ===${NC}"
-    printf "%-5s %-20s %-25s %-5s %-20s\n" "POS" "JOB_NAME" "SCRIPT" "GPU" "STATUS"
+    printf "%-5s %-25s %-30s %-5s %-20s\n" "POS" "JOB_NAME" "SCRIPT" "GPU" "STATUS"
     echo "--------------------------------------------------------------------------------"
     
     if [[ -s "$QUEUE_FILE" ]]; then
         local pos=1
         while IFS='|' read -r job_id script_name job_name env_name gpu_id log_file status; do
             gpu_display="${gpu_id:-"-"}"
-            printf "%-5s %-20s %-25s %-5s %-20s\n" "$pos" "$job_name" "$script_name" "$gpu_display" "$status"
+            printf "%-5s %-25s %-30s %-5s %-20s\n" "$pos" "$job_name" "$script_name" "$gpu_display" "$status"
             ((pos++))
         done < "$QUEUE_FILE"
     else

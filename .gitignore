@@ -19,3 +19,7 @@ Output/ica_rest_all/independent/
 Output/ica_rest_all/independent_harmonize/
 Output/ica_rest_all/independent_clean/
 Output/ica_rest_all/tests/
+.logs/
+.job*
+Code/worker.log
+Code/Miniconda3-latest-Linux-x86_64.sh
