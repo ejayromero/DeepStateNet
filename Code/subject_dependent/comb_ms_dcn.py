@@ -2,6 +2,7 @@
 Script to train a combined model of EEG DeepConvNet and MicroSNet
 '''
 import os
+import gc
 import sys
 import numpy as np
 import seaborn as sns
@@ -28,12 +29,28 @@ from lib.my_models import MicroSNet, FeatureExtractor, MultiModalClassifier, Emb
 
 
 print(f'==================== Start of script {os.path.basename(__file__)}! ===================')
+# Explicit CUDA setup
+if torch.cuda.is_available():
+    device = torch.device("cuda:0")  # Specify GPU 0 explicitly
+    torch.cuda.set_device(0)
+    print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+    print(f"CUDA Version: {torch.version.cuda}")
+    print(f"Available GPUs: {torch.cuda.device_count()}")
+else:
+    device = torch.device("cpu")
+    print("CUDA not available, using CPU")
+mf.print_memory_status("- INITIAL STARTUP")
 # ---------------------------# Load files ---------------------------
-data_path = 'Data/'
+script_dir = os.path.dirname(os.path.abspath(__file__))  # Current script directory
+project_root = os.path.dirname(os.path.dirname(script_dir))  # Up 2 levels: Code -> Master-Thesis
+# Set absolute paths
+data_path = os.path.join(project_root, 'Data') + os.sep
+output_folder = os.path.join(project_root, 'Output') + os.sep
+
 type_of_subject = 'dependent_harmonize'  # 'independent' or 'adaptive'
 model_name = 'embedded_microsnet'  # 'microsnet' or 'multiscale_microsnet'
-output_path = f'Output/ica_rest_all/{type_of_subject}/'
-input_path = 'Output/ica_rest_all/'
+output_path = f'{output_folder}ica_rest_all/{type_of_subject}/'
+input_path = f'{output_folder}ica_rest_all/'
 # Making sure all paths exist
 if not os.path.exists(input_path):
     os.makedirs(input_path)
@@ -46,7 +63,7 @@ n_subjects = 50
 batch_size = 32
 subject_list = list(range(n_subjects))
 all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path)
-
+mf.print_memory_status("- AFTER DATA LOADING") 
 if 'embedded' in model_name:
     kmeans_path = os.path.join(input_path, 'modkmeans_results', 'modkmeans_sequence')
     ms_timeseries_path = os.path.join(kmeans_path, 'modkmeans_sequence_indiv.pkl')
@@ -404,6 +421,8 @@ def run_subject_specific_multimodal_pipeline(results, ms_results, all_data, fina
     all_subject_results = []
     
     for subject_id in range(n_subjects):
+        mf.print_memory_status(f"- SUBJECT {id} START")  # Optional: at start of each subject
+    
         print(f"\n{'='*60}")
         print(f"Processing Subject {subject_id}")
         print(f"{'='*60}")
@@ -446,7 +465,7 @@ def run_subject_specific_multimodal_pipeline(results, ms_results, all_data, fina
         
         all_subject_results.append(subject_results)
         print(f"Subject {subject_id} results: {subject_results['test_accuracy']:.2f}% test accuracy")
-    
+        mf.print_memory_status(f"- SUBJECT {id} END")
     # Print summary
     print(f"\n{'='*60}")
     print("SUMMARY OF ALL SUBJECTS")
@@ -474,8 +493,10 @@ def run_subject_specific_multimodal_pipeline(results, ms_results, all_data, fina
     }
     return summary_results
 
-# Example usage:
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+gc.collect()
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+mf.print_memory_status("- AFTER GARBAGE COLLECTION")
 
 # Run the subject-specific multimodal pipeline for first 5 subjects
 multimodal_results = run_subject_specific_multimodal_pipeline(
@@ -494,3 +515,5 @@ for i, subject_result in enumerate(multimodal_results['subject_results']):
 # Save the results
 output_file = os.path.join(output_path, f'{type_of_subject}_multimodal_{model_name}_results_ica_rest_all.npy')
 np.save(output_file, multimodal_results)
+
+print(f'==================== End of script {os.path.basename(__file__)}! ===================')

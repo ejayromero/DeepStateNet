@@ -13,6 +13,71 @@ import math
 # Your existing models (MicroSNet, MultiScaleMicroSNet, EmbeddedMicroSNet, etc.)
 # ... [keeping all your existing model classes] ...
 
+class FeatureExtractor(nn.Module):
+    """Extracts features from pre-trained models by removing the final classification layer"""
+    
+    def __init__(self, pretrained_model):
+        super().__init__()
+        self.pretrained_model = pretrained_model
+        
+        # Get the feature extractor (everything except the final classifier)
+        if hasattr(pretrained_model, 'module'):
+            # If it's wrapped in EEGClassifier, get the underlying network
+            self.backbone = pretrained_model.module
+        else:
+            self.backbone = pretrained_model
+            
+        # Remove the final classification layer
+        if hasattr(self.backbone, 'final_layer'):
+            modules = list(self.backbone.children())[:-1]
+        elif hasattr(self.backbone, 'classifier'):
+            modules = [module for name, module in self.backbone.named_children() 
+                      if name != 'classifier']
+        else:
+            modules = list(self.backbone.children())[:-1]
+            
+        self.feature_extractor = nn.Sequential(*modules)
+        
+        # Freeze the feature extractor
+        for param in self.feature_extractor.parameters():
+            param.requires_grad = False
+            
+    def forward(self, x):
+        with torch.no_grad():
+            features = self.feature_extractor(x)
+            if len(features.shape) > 2:
+                # Global average pooling
+                features = F.adaptive_avg_pool1d(features.flatten(1, 2), 1).squeeze(-1)
+            return features
+
+class MultiModalClassifier(nn.Module):
+    """Classifier that takes features from multiple modalities"""
+    
+    def __init__(self, raw_feature_dim, ms_feature_dim, n_classes, dropout=0.5):
+        super().__init__()
+        
+        self.raw_feature_dim = raw_feature_dim
+        self.ms_feature_dim = ms_feature_dim
+        self.n_classes = n_classes
+        
+        # Feature fusion layer
+        total_features = raw_feature_dim + ms_feature_dim
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(total_features, 512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, n_classes)
+        )
+        
+    def forward(self, raw_features, ms_features):
+        # Concatenate features from both modalities
+        combined_features = torch.cat([raw_features, ms_features], dim=1)
+        return self.classifier(combined_features)
+
 class MicroSNet(nn.Module):
     """
     MicroSNet - Microstate Sequence Network
