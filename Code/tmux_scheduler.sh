@@ -226,45 +226,72 @@ execute_job() {
     # Send the command
     tmux send-keys -t "$session_name" "$run_command" Enter
     
-    # Start background monitoring process
+    # Start background monitoring process with enhanced debugging
     (
         local session_name="job_$job_name"
         local check_interval=10
+        local last_activity_time=$(date +%s)
+        local max_idle_time=300  # 5 minutes without activity = potential hang
         
         # Wait for session to start properly
         sleep 5
         
         # Monitor session until it ends
         while tmux has-session -t "$session_name" 2>/dev/null; do
+            # Check for activity in the session
+            current_time=$(date +%s)
+            
+            # Update last activity if log file has been modified recently
+            if [[ -f "$log_file" ]]; then
+                local log_modified=$(stat -c %Y "$log_file" 2>/dev/null || echo 0)
+                if [[ $log_modified -gt $((current_time - check_interval)) ]]; then
+                    last_activity_time=$current_time
+                fi
+            fi
+            
             sleep $check_interval
         done
         
-        # Session ended - check results
-        log_message "Session '$session_name' ended, checking results..."
+        # Session ended - check results with enhanced debugging
+        log_message "Session '$session_name' ended, analyzing termination..."
         
         # Give a moment for log file to be written
         sleep 2
         
-        # Check if job completed successfully by looking at the log file
+        # Enhanced termination analysis
         if [[ -f "$log_file" ]]; then
+            # Check for normal completion
             if grep -q "JOB_EXIT_CODE: 0" "$log_file"; then
                 update_job_status "$job_id" "COMPLETED"
                 success_message "Job '$job_name' completed successfully"
-            else
-                # Check if there's any exit code
+            elif grep -q "JOB_EXIT_CODE:" "$log_file"; then
+                # Job exited with error code
                 local exit_line=$(grep "JOB_EXIT_CODE:" "$log_file" | tail -1)
-                if [[ -n "$exit_line" ]]; then
-                    update_job_status "$job_id" "FAILED"
-                    error_message "Job '$job_name' failed with $(echo $exit_line | cut -d' ' -f2)"
+                local exit_code=$(echo $exit_line | cut -d' ' -f2)
+                echo "JOB_CRASHED_AT: $(date)" >> "$log_file"
+                update_job_status "$job_id" "FAILED"
+                error_message "Job '$job_name' crashed with exit code $exit_code"
+            elif grep -q "JOB_FINISHED_AT:" "$log_file"; then
+                # Has finish timestamp but no exit code - interrupted
+                echo "JOB_KILLED_AT: $(date)" >> "$log_file"
+                update_job_status "$job_id" "KILLED"
+                warning_message "Job '$job_name' was killed or interrupted"
+            else
+                # No completion markers - unexpected termination
+                local current_time=$(date +%s)
+                if [[ $((current_time - last_activity_time)) -gt $max_idle_time ]]; then
+                    echo "JOB_CRASHED_AT: $(date) (hung/timeout)" >> "$log_file"
+                    error_message "Job '$job_name' appears to have hung and was terminated"
                 else
-                    # No exit code found - probably crashed
-                    update_job_status "$job_id" "FAILED"
-                    error_message "Job '$job_name' crashed or was killed"
+                    echo "JOB_KILLED_AT: $(date) (force terminated)" >> "$log_file"
+                    warning_message "Job '$job_name' was forcefully terminated"
                 fi
+                update_job_status "$job_id" "FAILED"
             fi
         else
+            # No log file found - severe failure
             update_job_status "$job_id" "FAILED"
-            error_message "Job '$job_name' failed - no log file found"
+            error_message "Job '$job_name' failed catastrophically - no log file found"
         fi
         
         # Clean up session (should already be gone, but just in case)
@@ -291,7 +318,7 @@ update_job_status() {
     mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
 }
 
-# FIXED: Proper running job detection
+# FIXED: Check both RUNNING and FAILED jobs for proper status
 count_running_jobs() {
     local running_count=0
     
@@ -302,10 +329,25 @@ count_running_jobs() {
                 if tmux has-session -t "job_$job_name" 2>/dev/null; then
                     ((running_count++))
                 else
-                    # Session gone but status says running - update status
-                    log_message "Cleaning up stale job status: $job_name"
-                    update_job_status "$job_id" "FAILED"
+                    # Session gone but status says running - check if job completed successfully
+                    if [[ -f "$log_file" ]] && grep -q "JOB_EXIT_CODE: 0" "$log_file"; then
+                        # Job completed successfully
+                        update_job_status "$job_id" "COMPLETED" >/dev/null 2>&1
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Job '$job_name' completed successfully" >&2
+                    else
+                        # Job failed or crashed
+                        update_job_status "$job_id" "FAILED" >/dev/null 2>&1
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Job '$job_name' failed or crashed" >&2
+                    fi
                 fi
+            elif [[ "$status" == "FAILED" ]]; then
+                # Re-check FAILED jobs - they might have actually completed successfully
+                if [[ -f "$log_file" ]] && grep -q "JOB_EXIT_CODE: 0" "$log_file"; then
+                    # Job actually completed successfully but was mismarked as failed
+                    update_job_status "$job_id" "COMPLETED" >/dev/null 2>&1
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Re-examined: Job '$job_name' actually completed successfully" >&2
+                fi
+                # Note: FAILED jobs don't count toward running_count
             fi
         done < "$STATUS_FILE"
     fi
@@ -415,7 +457,7 @@ monitor_job() {
     fi
 }
 
-# Kill a job
+# Kill a job with enhanced logging
 kill_job() {
     local job_name="$1"
     
@@ -427,15 +469,25 @@ kill_job() {
     local session_name="job_$job_name"
     
     if tmux has-session -t "$session_name" 2>/dev/null; then
+        # Find the job's log file before killing
+        local job_entry=$(grep "|$job_name|" "$STATUS_FILE" | head -1)
+        local log_file=$(echo "$job_entry" | cut -d'|' -f5)
+        
+        # Add kill timestamp to log file
+        if [[ -n "$log_file" && -f "$log_file" ]]; then
+            echo "JOB_KILLED_AT: $(date) (manually terminated)" >> "$log_file"
+        fi
+        
+        # Kill the session
         tmux kill-session -t "$session_name"
         
         # Update status to KILLED
-        local job_id=$(grep "|$job_name|" "$STATUS_FILE" | head -1 | cut -d'|' -f1)
+        local job_id=$(echo "$job_entry" | cut -d'|' -f1)
         if [[ -n "$job_id" ]]; then
             update_job_status "$job_id" "KILLED"
         fi
         
-        success_message "Job '$job_name' killed"
+        success_message "Job '$job_name' killed and logged"
     else
         warning_message "No active session found for job '$job_name'"
     fi

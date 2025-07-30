@@ -121,7 +121,8 @@ case "$EXECUTION_MODE" in
         
         echo ""
         echo "Starting worker for first two jobs..."
-        nohup ./tmux_scheduler.sh worker 2 > worker.log 2>&1 &
+        mkdir -p worker_logs
+        nohup ./tmux_scheduler.sh worker $MAX_PARALLEL_JOBS > worker_logs/worker_$(date '+%Y%m%d_%H%M%S').log 2>&1 &
         worker_pid=$!
         
         if [[ -n "$SCRIPT_3" ]]; then
