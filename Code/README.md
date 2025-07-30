@@ -1,337 +1,620 @@
-# Tmux Job Scheduler
+# Tmux Job Scheduler - Complete User Guide
 
-A SLURM-like job management system using tmux for parallel execution of Python scripts on shared servers. No sudo access required.
+A flexible, SLURM-like job scheduler using tmux sessions. Perfect for running machine learning experiments on shared servers without requiring admin privileges.
+
+## Table of Contents
+
+- [Overview](#overview)
+  - [What is This System?](#what-is-this-system)
+  - [Key Components](#key-components)
+  - [System Architecture](#system-architecture)
+- [Quick Start](#quick-start)
+  - [Setup](#setup)
+  - [Your First Job](#your-first-job)
+- [Experiment Presets](#experiment-presets)
+  - [Basic Experiments](#basic-experiments)
+  - [Combined Workflows](#combined-workflows)
+  - [Custom Experiments](#custom-experiments)
+- [Execution Modes](#execution-modes)
+- [Normal Operation Guide](#normal-operation-guide)
+  - [Step 1: Choose Your Experiment](#step-1-choose-your-experiment)
+  - [Step 2: Run the Experiments](#step-2-run-the-experiments)
+  - [Step 3: Monitor Progress](#step-3-monitor-progress)
+- [Monitoring & Management](#monitoring--management)
+  - [Check Job Status](#check-job-status)
+  - [View Logs](#view-logs)
+  - [Monitor Jobs Live](#monitor-jobs-live)
+  - [Queue Management](#queue-management)
+- [Troubleshooting & Problem Handling](#troubleshooting--problem-handling)
+  - [Common Issues](#common-issues)
+  - [Emergency Procedures](#emergency-procedures)
+  - [Worker Management](#worker-management)
+- [Advanced Usage](#advanced-usage)
+  - [GPU Assignment](#gpu-assignment)
+  - [Environment Management](#environment-management)
+  - [Custom Configurations](#custom-configurations)
+- [File Structure](#file-structure)
+- [Safety Features](#safety-features)
+
+---
 
 ## Overview
 
-This scheduler allows you to submit multiple jobs to a queue and execute them in parallel using tmux sessions. Each job runs in its own isolated tmux session with automatic logging and cleanup.
+### What is This System?
 
-## Features
+This is a **job scheduling system** that uses tmux sessions to run your Python experiments safely on shared servers. Think of it as a lightweight alternative to SLURM that:
 
-- **Parallel Execution**: Run multiple jobs simultaneously
-- **Job Queue Management**: Submit jobs to queue for sequential or parallel processing
-- **Environment Support**: Supports both conda environments and Python virtual environments
-- **GPU Assignment**: Assign specific GPUs to jobs
-- **Automatic Logging**: All output saved with timestamps
-- **Session Management**: Jobs run in persistent tmux sessions that survive SSH disconnections
-- **Safe for Shared Servers**: Uses only user space, no system modifications required
+- **Requires no admin privileges** - runs entirely in your user space
+- **Survives SSH disconnections** - jobs continue running when you disconnect
+- **Manages job queues** - automatically runs jobs when resources are available
+- **Provides easy monitoring** - check status, view logs, monitor live progress
+- **Handles dependencies** - run jobs in sequence or after others complete
 
-## Directory Structure
+### Key Components
+
+| Component | Purpose | What It Does |
+|-----------|---------|-------------|
+| **tmux_scheduler.sh** | Core scheduler engine | Manages job queue, creates tmux sessions, handles job lifecycle |
+| **Worker** | Job processor | Background process that takes jobs from queue and runs them |
+| **Jobs** | Your experiments | Individual Python scripts running in isolated tmux sessions |
+| **Queue** | Job waiting list | Holds jobs waiting to be executed by the worker |
+| **quick_switch.sh** | Configuration manager | Instantly switch between experiment presets |
+| **flexible_runner.sh** | Universal launcher | Reads config and submits jobs to scheduler |
+| **experiment_config.sh** | Settings file | Defines which scripts to run and how |
+
+### System Architecture
 
 ```
-your_project_folder/
-├── Code/
-│   ├── dependent/
-│   │   └── ms.py
-│   ├── independent/
-│   │   └── ms_indep.py
-│   ├── adaptive/
-│   │   └── ms_adapt.py
-│   ├── tmux_scheduler.sh       # Main scheduler
-│   ├── run_all_ms_experiments.sh  # Custom runner
-│   ├── quick_jobs.sh           # Individual job helper
-│   ├── .venv/                  # Python virtual environment
-│   └── lib/
-│       └── my_models.py
-├── Data/
-└── Output/
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────────┐
+│  quick_switch   │───▶│ experiment_config │───▶│  flexible_runner    │
+│  Set presets    │    │  Store settings   │    │  Submit jobs        │
+└─────────────────┘    └──────────────────┘    └─────────────────────┘
+                                                           │
+                                                           ▼
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────────┐
+│     Worker      │◀───│  tmux_scheduler  │◀───│     Job Queue       │
+│ Process queue   │    │  Core engine     │    │  Waiting jobs       │
+└─────────────────┘    └──────────────────┘    └─────────────────────┘
+         │                        │
+         ▼                        ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                          Tmux Sessions                              │
+│  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐      │
+│  │ job_experiment1 │ │ job_experiment2 │ │ job_experiment3 │ ...  │
+│  │   Running       │ │   Running       │ │   Running       │      │
+│  └─────────────────┘ └─────────────────┘ └─────────────────┘      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Installation
+---
 
-1. Navigate to your Code directory:
-   ```bash
-   cd your_project_folder/Code
-   ```
+## Quick Start
 
-2. Create the scheduler scripts:
-   ```bash
-   nano tmux_scheduler.sh          # Copy main scheduler content
-   nano run_all_ms_experiments.sh # Copy custom runner content
-   nano quick_jobs.sh              # Copy helper script content
-   ```
+### Setup
 
-3. Make scripts executable:
-   ```bash
-   chmod +x tmux_scheduler.sh run_all_ms_experiments.sh quick_jobs.sh
-   ```
+1. **Make files executable:**
+```bash
+chmod +x tmux_scheduler.sh experiment_config.sh flexible_runner.sh quick_switch.sh
+```
 
-4. Create logs directory:
-   ```bash
-   mkdir -p ../.logs
-   ```
+2. **Verify your environment:**
+```bash
+# Check conda environment exists
+conda env list | grep myvenv
 
-## Usage
+# Test tmux is available
+tmux -V
+```
 
-### Quick Start - Run All Experiments
-
-Run all three microstate experiments in parallel:
+### Your First Job
 
 ```bash
-./run_all_ms_experiments.sh
+# 1. Choose microstate experiments in parallel mode
+./quick_switch.sh ms parallel
+
+# 2. Run the experiments
+./flexible_runner.sh
+
+# 3. Check status
+./tmux_scheduler.sh status
+```
+
+That's it! Your experiments are now running in the background.
+
+---
+
+## Experiment Presets
+
+### Basic Experiments
+
+| Preset | Scripts | Description |
+|--------|---------|-------------|
+| **`ms`** | `ms.py`, `ms_indep.py`, `ms_adapt.py` | Microstate analysis experiments |
+| **`dcn`** | `dcn.py`, `dcn_indep.py`, `dcn_adapt.py` | Deep Convolutional Network experiments |
+
+**Examples:**
+```bash
+# Run all microstate experiments in parallel
+./quick_switch.sh ms parallel
+./flexible_runner.sh
+
+# Run DCN experiments sequentially (one after another)
+./quick_switch.sh dcn sequential
+./flexible_runner.sh
+```
+
+### Combined Workflows
+
+| Preset | Workflow | Description |
+|--------|----------|-------------|
+| **`dep`** | `dcn.py` + `ms.py` → `comb_ms_dcn.py` | Dependent analysis workflow |
+| **`indep`** | `dcn_indep.py` + `ms_indep.py` → `comb_ms_dcn_indep.py` | Independent analysis workflow |
+| **`adapt`** | `dcn_adapt.py` + `ms_adapt.py` → `comb_ms_dcn_adapt.py` | Adaptive analysis workflow |
+
+**Examples:**
+```bash
+# Run dependent workflow: dcn.py + ms.py in parallel, then combined analysis
+./quick_switch.sh dep dependency
+./flexible_runner.sh
+
+# Run independent workflow with sequential execution
+./quick_switch.sh indep sequential
+./flexible_runner.sh
+
+# Run adaptive workflow
+./quick_switch.sh adapt dependency
+./flexible_runner.sh
+```
+
+### Custom Experiments
+
+**Interactive setup:**
+```bash
+./quick_switch.sh custom
+
+# You'll be prompted for:
+# - Script 1 path: your_folder/script1.py
+# - Script 2 path: your_folder/script2.py  
+# - Script 3 path: your_folder/script3.py
+# - Job names for each script
+
+./flexible_runner.sh
+```
+
+**Manual configuration:**
+Edit `experiment_config.sh` directly and uncomment the custom section:
+```bash
+# --- CUSTOM EXPERIMENTS ---
+EXPERIMENT_TYPE="custom"
+SCRIPT_1="your_folder/analysis.py"
+SCRIPT_2="your_folder/visualization.py"
+SCRIPT_3="your_folder/report.py"
+JOB_NAME_1="analysis_job"
+JOB_NAME_2="viz_job"
+JOB_NAME_3="report_job"
+```
+
+---
+
+## Execution Modes
+
+| Mode | Behavior | Best For |
+|------|----------|----------|
+| **`parallel`** | All scripts run simultaneously | When you have enough resources and scripts are independent |
+| **`sequential`** | Scripts run one after another | Limited resources or when order matters |
+| **`dependency`** | Scripts 1&2 run in parallel, then script 3 | When script 3 needs results from scripts 1&2 |
+
+**Examples:**
+```bash
+# Parallel execution (default for basic experiments)
+./quick_switch.sh ms parallel
+
+# Sequential execution
+./quick_switch.sh dcn sequential
+
+# Dependency execution (default for combined workflows)
+./quick_switch.sh dep dependency
+```
+
+---
+
+## Normal Operation Guide
+
+### Step 1: Choose Your Experiment
+
+```bash
+# Choose from presets
+./quick_switch.sh ms parallel      # Microstate experiments
+./quick_switch.sh dcn sequential   # DCN experiments  
+./quick_switch.sh dep dependency   # Combined dependent workflow
+./quick_switch.sh indep dependency # Combined independent workflow
+./quick_switch.sh adapt dependency # Combined adaptive workflow
+./quick_switch.sh custom           # Custom setup
+```
+
+This updates your `experiment_config.sh` with the chosen preset.
+
+### Step 2: Run the Experiments
+
+```bash
+./flexible_runner.sh
 ```
 
 This will:
-- Submit dependent/ms.py, independent/ms_indep.py, and adaptive/ms_adapt.py to the queue
-- Start a worker to run 3 jobs simultaneously
-- Create log files in `../.logs/`
-- Allow safe SSH disconnection
+- Validate your scripts exist
+- Check your conda environment
+- Submit jobs to the queue
+- Start a worker to process jobs
+- Show you monitoring commands
 
-### Manual Job Submission
+**Expected output:**
+```
+Flexible Experiment Runner
+==========================
+Configuration loaded: microstate experiments
+Execution mode: parallel
+Working directory: /your/path/Code
+...
+✓ All scripts found
+✓ Conda environment 'myvenv' is available
 
-#### Submit Individual Jobs
+Submitting jobs...
+=== PARALLEL EXECUTION ===
+1. Submitting: ms_dependent (subject_dependent/ms.py)
+2. Submitting: ms_independent (subject_independent/ms_indep.py)  
+3. Submitting: ms_adaptive (subject_adaptive/ms_adapt.py)
 
-```bash
-# Submit a single job
-./tmux_scheduler.sh submit dependent/ms.py "dependent_exp" .venv
-
-# Submit with GPU assignment
-./tmux_scheduler.sh submit dependent/ms.py "dependent_exp" .venv 0
-
-# Submit multiple jobs
-./tmux_scheduler.sh submit dependent/ms.py "dep_exp" .venv
-./tmux_scheduler.sh submit independent/ms_indep.py "indep_exp" .venv
-./tmux_scheduler.sh submit adaptive/ms_adapt.py "adapt_exp" .venv
+Starting worker with 3 parallel jobs...
+Worker started in background (PID: 12345)
 ```
 
-#### Start Worker
+### Step 3: Monitor Progress
 
 ```bash
-# Sequential execution (1 job at a time)
-nohup ./tmux_scheduler.sh worker 1 > worker.log 2>&1 &
+# Quick status check
+./tmux_scheduler.sh status
 
-# Parallel execution (3 jobs simultaneously)
-nohup ./tmux_scheduler.sh worker 3 > worker.log 2>&1 &
+# Watch logs in real-time
+./tmux_scheduler.sh logs ms_dependent
+
+# Monitor a job live (enter its tmux session)
+./tmux_scheduler.sh monitor ms_dependent
 ```
 
-### Monitoring Jobs
+---
 
-#### Check Job Status
+## Monitoring & Management
+
+### Check Job Status
+
 ```bash
+# View all job statuses
 ./tmux_scheduler.sh status
 ```
 
-#### View Job Queue
-```bash
-./tmux_scheduler.sh queue
+**Sample output:**
+```
+=== JOB STATUS ===
+JOB_NAME                 STATUS          JOB_ID     GPU  LAST_UPDATE
+ms_dependent            RUNNING         12345      -    2024-07-30 10:30:00
+ms_independent          RUNNING         12346      1    2024-07-30 10:30:05
+ms_adaptive             QUEUED          12347      -    2024-07-30 10:30:00
 ```
 
-#### Monitor Job in Real-time
-```bash
-./tmux_scheduler.sh monitor job_name
-# Detach with: Ctrl+B, then D
-```
-
-#### View Job Logs
-```bash
-./tmux_scheduler.sh logs job_name
-```
-
-#### Check Worker Status
-```bash
-tail -f worker.log
-```
-
-### Using Quick Jobs Helper
-
-```bash
-# Submit individual experiments
-./quick_jobs.sh dependent     # Submit only dependent experiment
-./quick_jobs.sh independent   # Submit only independent experiment
-./quick_jobs.sh adaptive      # Submit only adaptive experiment
-
-# Submit all experiments
-./quick_jobs.sh all-sequential # Run one after another
-./quick_jobs.sh all-parallel   # Run simultaneously
-
-# Check status
-./quick_jobs.sh status
-./quick_jobs.sh queue
-```
-
-## Commands Reference
-
-### Main Scheduler Commands
-
-| Command | Description |
-|---------|-------------|
-| `submit SCRIPT JOB_NAME [ENV] [GPU]` | Submit job to queue |
-| `run SCRIPT JOB_NAME [ENV] [GPU]` | Run job immediately |
-| `status` | Show all job statuses |
-| `queue` | Show current queue |
-| `logs JOB_NAME` | Show logs for a job |
-| `monitor JOB_NAME` | Monitor job in real-time |
-| `kill JOB_NAME` | Kill a running job |
-| `clean` | Clean completed jobs from status |
-| `worker [MAX_PARALLEL]` | Start job worker |
-| `set-parallel N` | Set default parallel limit |
-
-### Job States
-
-- **QUEUED**: Job submitted and waiting to run
-- **RUNNING**: Job currently executing
+**Status meanings:**
+- **RUNNING**: Job is actively executing
+- **QUEUED**: Job is waiting for worker to start it
 - **COMPLETED**: Job finished successfully
-- **FAILED**: Job terminated with errors
-- **KILLED**: Job manually terminated
+- **FAILED**: Job crashed or returned error code
+- **KILLED**: Job was manually terminated
 
-## Environment Support
+### View Logs
 
-### Python Virtual Environment (.venv)
 ```bash
-./tmux_scheduler.sh submit script.py "job_name" .venv
+# View complete logs for a job
+./tmux_scheduler.sh logs ms_dependent
+
+# Watch logs in real-time (tail -f style)
+tail -f ../.logs/ms_dependent_*.log
+
+# View most recent log entries
+tail -20 ../.logs/ms_dependent_*.log
 ```
 
-### Conda Environment
+### Monitor Jobs Live
+
 ```bash
-./tmux_scheduler.sh submit script.py "job_name" my_conda_env
+# Enter the job's tmux session to watch it run
+./tmux_scheduler.sh monitor ms_dependent
 ```
 
-### Custom Virtual Environment Path
-```bash
-./tmux_scheduler.sh submit script.py "job_name" /path/to/venv
-```
+**To exit monitor mode:**
+1. Press `Ctrl + B`
+2. Release both keys  
+3. Press `D` (detach)
 
-### No Environment
-```bash
-./tmux_scheduler.sh submit script.py "job_name"
-```
+**Alternative exit methods:**
+- `Ctrl + C` (may work in some cases)
+- Type `exit` and press Enter (will kill the job - use carefully!)
 
-## GPU Support
-
-Assign specific GPUs to jobs:
+### Queue Management
 
 ```bash
-# Use GPU 0
-./tmux_scheduler.sh submit script.py "job_name" .venv 0
+# View current job queue
+./tmux_scheduler.sh queue
 
-# Use GPU 1
-./tmux_scheduler.sh submit script.py "job_name" .venv 1
-
-# Auto-assign or use CPU
-./tmux_scheduler.sh submit script.py "job_name" .venv
-```
-
-## File Locations
-
-### Log Files
-- Location: `../.logs/`
-- Format: `JOB_NAME_YYYYMMDD_HHMMSS.log`
-- Contains: Complete job output with timestamps
-
-### Tracking Files
-- `.job_queue`: Current job queue
-- `.job_status`: Job status tracking
-- `worker.log`: Worker process log
-
-### Tmux Sessions
-- Format: `job_JOB_NAME`
-- Auto-created when jobs start
-- Auto-removed when jobs complete
-
-## Troubleshooting
-
-### Check Running Jobs
-```bash
-./tmux_scheduler.sh status
-tmux ls
-```
-
-### Restart Everything
-```bash
-# Kill worker
-pkill -f tmux_scheduler
-
-# Clear queues
-> .job_queue
-> .job_status
-
-# Resubmit jobs
-./run_all_ms_experiments.sh
-```
-
-### View All Sessions
-```bash
-tmux ls
-```
-
-### Kill Specific Session
-```bash
-tmux kill-session -t job_name
-```
-
-### Check System Resources
-```bash
-htop                    # CPU and memory usage
-nvidia-smi             # GPU usage (if available)
-df -h                  # Disk usage
-```
-
-## Safety Notes
-
-This scheduler is designed for shared servers and:
-
-- Uses only user space (no sudo required)
-- Creates files only in your directories
-- Uses standard tmux (usually pre-installed)
-- Does not modify system configurations
-- Does not affect other users
-- Resource usage equivalent to running scripts manually
-
-## Examples
-
-### Microstate Experiments (Recommended)
-
-```bash
-# Run all three experiments in parallel
-./run_all_ms_experiments.sh
-
-# Monitor progress
-./tmux_scheduler.sh status
-./tmux_scheduler.sh monitor dependent_50subj
-```
-
-### Custom Workflow
-
-```bash
-# Submit jobs with different priorities
-./tmux_scheduler.sh submit dependent/ms.py "high_priority" .venv 0
-./tmux_scheduler.sh submit analysis/postprocess.py "low_priority" .venv
-
-# Start worker with limited parallelism
-nohup ./tmux_scheduler.sh worker 2 > worker.log 2>&1 &
-
-# Monitor and manage
-./tmux_scheduler.sh status
-./tmux_scheduler.sh logs high_priority
-```
-
-## Advanced Usage
-
-### Set Default Parallel Limit
-```bash
-./tmux_scheduler.sh set-parallel 4
-```
-
-### Clean Completed Jobs
-```bash
+# Clean completed jobs from status display
 ./tmux_scheduler.sh clean
 ```
 
-### Run Jobs Immediately (Bypass Queue)
+---
+
+## Troubleshooting & Problem Handling
+
+### Common Issues
+
+#### **Issue: "Script not found"**
 ```bash
-./tmux_scheduler.sh run script.py "urgent_job" .venv
+# Check if your scripts exist
+ls -la subject_dependent/ms.py
+ls -la subject_independent/ms_indep.py
+
+# Verify you're in the correct directory
+pwd  # Should be in your Code/ directory
 ```
 
-### Background Worker with Logging
+#### **Issue: "Conda environment not found"**
 ```bash
+# List available environments
+conda env list
+
+# Create the environment if missing
+conda create -n myvenv python=3.11 -y
+conda activate myvenv
+pip install torch numpy pandas matplotlib seaborn scikit-learn
+```
+
+#### **Issue: Jobs stuck in QUEUED status**
+```bash
+# Check if worker is running
+ps aux | grep tmux_scheduler
+
+# If no worker found, start one
 nohup ./tmux_scheduler.sh worker 3 > worker.log 2>&1 &
+
+# Check worker logs
 tail -f worker.log
 ```
 
-## Support
+#### **Issue: Job shows RUNNING but tmux session doesn't exist**
+```bash
+# List all tmux sessions
+tmux list-sessions
 
-For issues or questions:
-1. Check job status: `./tmux_scheduler.sh status`
-2. View logs: `./tmux_scheduler.sh logs JOB_NAME`
-3. Check worker log: `tail -f worker.log`
-4. Verify tmux sessions: `tmux ls`
+# Clean up stale job statuses
+./tmux_scheduler.sh clean
+
+# Check system resources
+htop  # or top
+df -h  # Check disk space
+```
+
+### Emergency Procedures
+
+#### **Stop All Jobs Immediately**
+
+```bash
+# Method 1: Kill specific jobs
+./tmux_scheduler.sh kill ms_dependent
+./tmux_scheduler.sh kill ms_independent
+./tmux_scheduler.sh kill ms_adaptive
+
+# Method 2: Kill all tmux sessions (NUCLEAR OPTION)
+tmux kill-server
+
+# Method 3: Stop worker and clean up
+pkill -f tmux_scheduler
+./tmux_scheduler.sh clean
+```
+
+#### **System Recovery**
+
+```bash
+# 1. Stop everything
+pkill -f tmux_scheduler
+tmux kill-server
+
+# 2. Clean up status files
+rm -f .job_queue .job_status
+
+# 3. Start fresh
+./quick_switch.sh ms parallel
+./flexible_runner.sh
+```
+
+#### **Disk Space Issues**
+
+```bash
+# Check log directory size
+du -sh ../.logs/
+
+# Clean old logs (older than 7 days)
+find ../.logs/ -name "*.log" -mtime +7 -delete
+
+# Clean completed job statuses
+./tmux_scheduler.sh clean
+```
+
+### Worker Management
+
+#### **Check Worker Status**
+```bash
+# Check if worker is running
+ps aux | grep tmux_scheduler | grep worker
+
+# Check worker logs  
+tail -f worker.log
+
+# Check worker performance
+cat worker.log | grep "Currently running"
+```
+
+#### **Restart Worker with Different Settings**
+```bash
+# Stop current worker
+pkill -f tmux_scheduler
+
+# Start with 1 job at a time (sequential)
+nohup ./tmux_scheduler.sh worker 1 > worker.log 2>&1 &
+
+# Start with 5 parallel jobs (high performance)
+nohup ./tmux_scheduler.sh worker 5 > worker.log 2>&1 &
+
+# Check new worker status
+./tmux_scheduler.sh status
+```
+
+#### **Worker Not Processing Queue**
+```bash
+# Check queue contents
+./tmux_scheduler.sh queue
+
+# Check if jobs are properly formatted
+cat .job_queue
+
+# Restart worker
+pkill -f tmux_scheduler
+nohup ./tmux_scheduler.sh worker 3 > worker.log 2>&1 &
+```
+
+---
+
+## Advanced Usage
+
+### GPU Assignment
+
+```bash
+# Assign specific GPUs to jobs
+./tmux_scheduler.sh submit subject_dependent/ms.py "gpu_job1" myvenv 0    # Use GPU 0
+./tmux_scheduler.sh submit subject_independent/ms_indep.py "gpu_job2" myvenv 1    # Use GPU 1
+
+# Check GPU usage
+nvidia-smi
+
+# Auto-assign GPUs (leave GPU parameter empty)
+./tmux_scheduler.sh submit subject_adaptive/ms_adapt.py "auto_gpu_job" myvenv
+```
+
+### Environment Management
+
+```bash
+# Use different conda environments
+./tmux_scheduler.sh submit my_script.py "job1" pytorch_env
+./tmux_scheduler.sh submit my_script.py "job2" tensorflow_env
+
+# Use Python virtual environments
+./tmux_scheduler.sh submit my_script.py "job3" .venv
+./tmux_scheduler.sh submit my_script.py "job4" /path/to/my_venv
+
+# Run without any environment
+./tmux_scheduler.sh submit my_script.py "job5"
+```
+
+### Custom Configurations
+
+Edit `experiment_config.sh` for complex setups:
+
+```bash
+# Example: Mixed environments and GPU assignments
+SCRIPT_1="analysis/data_prep.py"
+SCRIPT_2="training/model_train.py"  
+SCRIPT_3="evaluation/test_model.py"
+JOB_NAME_1="data_prep"
+JOB_NAME_2="training"
+JOB_NAME_3="evaluation"
+CONDA_ENV="myvenv"
+GPU_1=""      # No GPU for data prep
+GPU_2="0"     # GPU 0 for training
+GPU_3="1"     # GPU 1 for evaluation
+```
+
+---
+
+## File Structure
+
+```
+Code/
+├── tmux_scheduler.sh           # Core job scheduler
+├── experiment_config.sh        # Experiment configuration
+├── flexible_runner.sh          # Universal job runner
+├── quick_switch.sh            # Preset switcher
+├── .job_queue                 # Job queue (auto-generated)
+├── .job_status               # Job status tracking (auto-generated)
+├── worker.log                # Worker process log
+├── subject_dependent/        # Your experiment scripts
+│   ├── ms.py
+│   └── dcn.py
+├── subject_independent/
+│   ├── ms_indep.py
+│   └── dcn_indep.py
+├── subject_adaptive/
+│   ├── ms_adapt.py
+│   └── dcn_adapt.py
+├── combined/                 # Combined analysis scripts
+│   ├── comb_ms_dcn.py
+│   ├── comb_ms_dcn_indep.py
+│   └── comb_ms_dcn_adapt.py
+└── lib/                     # Your libraries
+
+../.logs/                    # Log directory
+├── ms_dependent_20240730_103000.log
+├── ms_independent_20240730_103005.log
+└── ms_adaptive_20240730_103010.log
+```
+
+---
+
+## Safety Features
+
+- **No sudo required**: Runs entirely in user space
+- **SSH disconnect safe**: Jobs continue running after disconnect
+- **Automatic cleanup**: Completed jobs are tracked and cleaned
+- **Error handling**: Failed jobs are marked and logged
+- **Resource protection**: Worker limits prevent system overload
+- **Log preservation**: All output is saved with timestamps
+- **Safe termination**: Jobs can be killed without affecting others
+- **Backup configs**: Configuration changes are backed up
+
+---
+
+## Quick Reference Commands
+
+```bash
+# Setup
+chmod +x *.sh
+
+# Switch experiments
+./quick_switch.sh ms parallel
+./quick_switch.sh dep dependency
+
+# Run experiments  
+./flexible_runner.sh
+
+# Monitor
+./tmux_scheduler.sh status
+./tmux_scheduler.sh monitor JOB_NAME
+./tmux_scheduler.sh logs JOB_NAME
+
+# Control
+./tmux_scheduler.sh kill JOB_NAME
+pkill -f tmux_scheduler  # Stop worker
+
+# Exit monitor mode
+Ctrl+B, then D
+```
+
+---
+
+**Happy experimenting!** 🚀
+
+For questions or issues, check the troubleshooting section or examine the log files in `../.logs/` directory.

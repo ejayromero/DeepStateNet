@@ -24,3 +24,4 @@ Output/ica_rest_all/tests/
 Code/worker.log
 Code/Miniconda3-latest-Linux-x86_64.sh
 *.log
+*.backup

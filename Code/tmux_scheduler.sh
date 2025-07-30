@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # tmux_scheduler.sh - A SLURM-like job scheduler using tmux
-# Updated for conda environment support
+# FIXED VERSION: Proper parallel processing, unique job IDs, and auto-cleanup
 # Safe for shared servers - uses only user space, no sudo required
 
 set -e  # Exit on any error
@@ -28,7 +28,7 @@ touch "$QUEUE_FILE" "$STATUS_FILE"
 # Functions
 print_help() {
     cat << EOF
-🧠 Tmux Job Scheduler - SLURM-like job management with tmux
+Tmux Job Scheduler - SLURM-like job management with tmux
 Safe for shared servers - uses only your user space!
 
 USAGE:
@@ -102,10 +102,13 @@ warning_message() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
-# Generate unique job ID
+# Generate unique job ID - FIXED: Use nanoseconds for true uniqueness
 generate_job_id() {
     local job_name="$1"
-    echo "${job_name}_$(date '+%Y%m%d_%H%M%S')"
+    # Use nanoseconds and random number for guaranteed uniqueness
+    local timestamp=$(date '+%Y%m%d_%H%M%S_%N')  # Added nanoseconds
+    local random=$(( RANDOM % 10000 ))
+    echo "${job_name}_${timestamp}_${random}"
 }
 
 # Add job to queue
@@ -133,7 +136,7 @@ submit_job() {
     echo "$job_id|$script_name|$job_name|$env_name|$gpu_id|$log_file|QUEUED" >> "$QUEUE_FILE"
     
     # Add to status
-    echo "$job_id|$job_name|QUEUED|$(date)|$log_file|$gpu_id" >> "$STATUS_FILE"
+    echo "$job_id|$job_name|QUEUED|$(date '+%Y-%m-%d %H:%M:%S')|$log_file|$gpu_id" >> "$STATUS_FILE"
     
     success_message "Job '$job_name' (ID: $job_id) submitted to queue"
     if [[ -n "$gpu_id" ]]; then
@@ -217,33 +220,54 @@ execute_job() {
         sleep 3
     fi
     
-    # Create the command to run
-    local run_command="python3 $script_name 2>&1 | tee $log_file"
+    # Create the command to run with proper exit code capture
+    local run_command="python3 $script_name 2>&1 | tee $log_file; exit_code=\$?; echo \"JOB_EXIT_CODE: \$exit_code\" | tee -a $log_file; echo \"JOB_FINISHED_AT: \$(date)\" | tee -a $log_file; exit \$exit_code"
     
     # Send the command
     tmux send-keys -t "$session_name" "$run_command" Enter
     
-    # Set up a monitoring script that runs after the main command
-    tmux send-keys -t "$session_name" "echo 'Job completed with exit code: \$?'" Enter
-    tmux send-keys -t "$session_name" "echo 'Job finished at: \$(date)'" Enter
-    
-    # Schedule session cleanup and status update
+    # Start background monitoring process
     (
-        # Wait for the session to finish
+        local session_name="job_$job_name"
+        local check_interval=10
+        
+        # Wait for session to start properly
+        sleep 5
+        
+        # Monitor session until it ends
         while tmux has-session -t "$session_name" 2>/dev/null; do
-            sleep 10
+            sleep $check_interval
         done
         
-        # Check if job completed successfully
-        if tail -5 "$log_file" | grep -q "Job completed with exit code: 0"; then
-            update_job_status "$job_id" "COMPLETED"
-            success_message "Job '$job_name' completed successfully"
+        # Session ended - check results
+        log_message "Session '$session_name' ended, checking results..."
+        
+        # Give a moment for log file to be written
+        sleep 2
+        
+        # Check if job completed successfully by looking at the log file
+        if [[ -f "$log_file" ]]; then
+            if grep -q "JOB_EXIT_CODE: 0" "$log_file"; then
+                update_job_status "$job_id" "COMPLETED"
+                success_message "Job '$job_name' completed successfully"
+            else
+                # Check if there's any exit code
+                local exit_line=$(grep "JOB_EXIT_CODE:" "$log_file" | tail -1)
+                if [[ -n "$exit_line" ]]; then
+                    update_job_status "$job_id" "FAILED"
+                    error_message "Job '$job_name' failed with $(echo $exit_line | cut -d' ' -f2)"
+                else
+                    # No exit code found - probably crashed
+                    update_job_status "$job_id" "FAILED"
+                    error_message "Job '$job_name' crashed or was killed"
+                fi
+            fi
         else
-            update_job_status "$job_id" "FAILED" 
-            error_message "Job '$job_name' failed"
+            update_job_status "$job_id" "FAILED"
+            error_message "Job '$job_name' failed - no log file found"
         fi
         
-        # Clean up session
+        # Clean up session (should already be gone, but just in case)
         tmux kill-session -t "$session_name" 2>/dev/null || true
         
     ) &
@@ -267,6 +291,28 @@ update_job_status() {
     mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
 }
 
+# FIXED: Proper running job detection
+count_running_jobs() {
+    local running_count=0
+    
+    if [[ -s "$STATUS_FILE" ]]; then
+        while IFS='|' read -r job_id job_name status last_update log_file gpu_id; do
+            if [[ "$status" == "RUNNING" ]]; then
+                # Check if tmux session actually exists
+                if tmux has-session -t "job_$job_name" 2>/dev/null; then
+                    ((running_count++))
+                else
+                    # Session gone but status says running - update status
+                    log_message "Cleaning up stale job status: $job_name"
+                    update_job_status "$job_id" "FAILED"
+                fi
+            fi
+        done < "$STATUS_FILE"
+    fi
+    
+    echo $running_count
+}
+
 # Show job status
 show_status() {
     echo -e "\n${BLUE}=== JOB STATUS ===${NC}"
@@ -275,6 +321,15 @@ show_status() {
     
     if [[ -s "$STATUS_FILE" ]]; then
         while IFS='|' read -r job_id job_name status last_update log_file gpu_id; do
+            # Check if session still exists for RUNNING jobs
+            if [[ "$status" == "RUNNING" ]]; then
+                if ! tmux has-session -t "job_$job_name" 2>/dev/null; then
+                    # Session is gone but status says running - update to failed
+                    update_job_status "$job_id" "FAILED"
+                    status="FAILED"
+                fi
+            fi
+            
             case "$status" in
                 "RUNNING") color="$YELLOW" ;;
                 "COMPLETED") color="$GREEN" ;;
@@ -283,7 +338,9 @@ show_status() {
                 *) color="$NC" ;;
             esac
             gpu_display="${gpu_id:-"-"}"
-            printf "%-25s ${color}%-15s${NC} %-10s %-5s %-20s\n" "$job_name" "$status" "${job_id##*_}" "$gpu_display" "$last_update"
+            # Show short job ID for readability
+            short_job_id=$(echo "$job_id" | rev | cut -d'_' -f1-2 | rev)
+            printf "%-25s ${color}%-15s${NC} %-10s %-5s %-20s\n" "$job_name" "$status" "$short_job_id" "$gpu_display" "$last_update"
         done < "$STATUS_FILE"
     else
         echo "No jobs found."
@@ -394,7 +451,7 @@ clean_jobs() {
     success_message "Cleaned completed jobs from status"
 }
 
-# Job worker (processes queue)
+# Job worker (processes queue) - FIXED PARALLEL PROCESSING
 start_worker() {
     local max_parallel="${1:-$DEFAULT_MAX_PARALLEL}"
     
@@ -402,8 +459,10 @@ start_worker() {
     log_message "Press Ctrl+C to stop"
     
     while true; do
-        # Count currently running jobs
-        local running_jobs=$(grep "|RUNNING|" "$STATUS_FILE" 2>/dev/null | wc -l)
+        # FIXED: Use proper running job counting
+        local running_jobs=$(count_running_jobs)
+        
+        log_message "Currently running: $running_jobs/$max_parallel jobs"
         
         # Check if we can start more jobs
         if [[ "$running_jobs" -lt "$max_parallel" ]]; then
@@ -416,19 +475,28 @@ start_worker() {
                 
                 log_message "Processing queued job: $job_name (Running: $running_jobs/$max_parallel)"
                 
-                # Remove from queue
+                # Remove from queue FIRST
                 grep -v "^$job_id|" "$QUEUE_FILE" > "${QUEUE_FILE}.tmp"
                 mv "${QUEUE_FILE}.tmp" "$QUEUE_FILE"
                 
                 # Execute the job
                 execute_job "$job_id" "$script_name" "$job_name" "$env_name" "$gpu_id" "$log_file"
                 
-                sleep 2  # Brief pause between job starts
+                sleep 3  # Give time for job to start
             else
-                sleep 10  # No jobs to process, wait longer
+                # No jobs to process
+                if [[ "$running_jobs" -eq 0 ]]; then
+                    log_message "No jobs in queue and no jobs running. Waiting..."
+                    sleep 10
+                else
+                    log_message "No jobs in queue but $running_jobs jobs still running. Waiting..."
+                    sleep 30
+                fi
             fi
         else
-            sleep 30  # At max capacity, check every 30 seconds
+            # At max capacity
+            log_message "At maximum capacity ($max_parallel jobs). Waiting for jobs to complete..."
+            sleep 30
         fi
     done
 }
