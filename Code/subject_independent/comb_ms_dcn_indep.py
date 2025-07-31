@@ -72,7 +72,7 @@ with open(ms_timeseries_path, 'rb') as f:
     finals_ls = pickle.load(f)
 
 # Load results from individual models
-results = np.load(os.path.join(input_path, "independent", f'independent_results_ica_rest_all.npy'), allow_pickle=True).item()
+results = np.load(os.path.join(output_path, f'{type_of_subject}_results_ica_rest_all.npy'), allow_pickle=True).item()
 ms_results = np.load(os.path.join(output_path, f'{type_of_subject}_ms_{model_name}_results_ica_rest_all.npy'), allow_pickle=True).item()
 
 print(f'N_models in results: {len(results["models"])}')

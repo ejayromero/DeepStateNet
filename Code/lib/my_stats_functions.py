@@ -402,10 +402,6 @@ def load_and_analyze(results_file=None, analysis_type='all', output_path=None):
         print(f"❌ Unknown analysis type: {analysis_type}")
         return None
 
-print("✅ FIXED: Adaptive multimodal NOW INCLUDED in subject comparisons!")
-print("📊 Model comparisons: Adaptive uses fine-tuned scores")  
-print("📊 Subject comparisons: Adaptive uses base scores for fair comparison")
-print("🎯 All three subject types compared for all models including Multimodal")
 
 from scipy import stats
 from scipy.stats import f_oneway, ttest_rel, shapiro, levene
@@ -1268,3 +1264,35 @@ def process_comparison_group(df_anova, comparison_types, comparison_accuracies, 
         'pairwise': pairwise_results
     }
 
+def modkmeans_exact_spatial_score(cluster):
+    """
+    Use the EXACT same computation as ModKMeans polarity alignment.
+    """
+    
+    cluster_centers = cluster.cluster_centers_
+    labels = cluster.labels_
+    fitted_data = cluster.fitted_data
+    
+    # Replicate the exact ModKMeans polarity alignment
+    x = cluster_centers[labels].T  # Expanded cluster centers
+    
+    # This is the exact computation from ModKMeans
+    correlations = (x.T * fitted_data.T).sum(axis=1)  # Dot products
+    
+    # Take absolute values for polarity invariance
+    abs_correlations = np.abs(correlations)
+    
+    # Normalize by vector norms to get true correlations
+    data_norms = np.linalg.norm(fitted_data.T, axis=1)
+    center_norms = np.linalg.norm(x.T, axis=1)
+    
+    # Avoid division by zero
+    valid_mask = (data_norms > 0) & (center_norms > 0)
+    
+    if np.sum(valid_mask) == 0:
+        return 0.0
+    
+    # Normalized correlations (this is what ModKMeans actually computes)
+    normalized_correlations = abs_correlations[valid_mask] / (data_norms[valid_mask] * center_norms[valid_mask])
+    
+    return np.mean(normalized_correlations)
