@@ -20,34 +20,160 @@ class FeatureExtractor(nn.Module):
         super().__init__()
         self.pretrained_model = pretrained_model
         
-        # Get the feature extractor (everything except the final classifier)
+        # Get the backbone model
         if hasattr(pretrained_model, 'module'):
-            # If it's wrapped in EEGClassifier, get the underlying network
+            # If it's wrapped in DataParallel or similar
             self.backbone = pretrained_model.module
         else:
             self.backbone = pretrained_model
             
-        # Remove the final classification layer
-        if hasattr(self.backbone, 'final_layer'):
-            modules = list(self.backbone.children())[:-1]
-        elif hasattr(self.backbone, 'classifier'):
-            modules = [module for name, module in self.backbone.named_children() 
-                      if name != 'classifier']
-        else:
-            modules = list(self.backbone.children())[:-1]
-            
-        self.feature_extractor = nn.Sequential(*modules)
+        # Determine model type and create appropriate feature extractor
+        model_type = type(self.backbone).__name__
+        print(f"Creating FeatureExtractor for model type: {model_type}")
         
+        if model_type == 'EmbeddedMicroSNet':
+            # For EmbeddedMicroSNet, extract features before the classifier
+            self.feature_extractor = self._create_embedded_feature_extractor()
+        elif model_type == 'AttentionMicroSNet':
+            # For AttentionMicroSNet, extract features before the classifier
+            self.feature_extractor = self._create_attention_feature_extractor()
+        elif model_type == 'LightweightAttentionMicroSNet':
+            # For LightweightAttentionMicroSNet
+            self.feature_extractor = self._create_lightweight_attention_feature_extractor()
+        else:
+            # For other models (MicroSNet, MultiScaleMicroSNet, etc.)
+            self.feature_extractor = self._create_generic_feature_extractor()
+            
         # Freeze the feature extractor
         for param in self.feature_extractor.parameters():
             param.requires_grad = False
             
+    def _create_embedded_feature_extractor(self):
+        """Create feature extractor for EmbeddedMicroSNet"""
+        class EmbeddedFeatureExtractor(nn.Module):
+            def __init__(self, original_model):
+                super().__init__()
+                self.microstate_embedding = original_model.microstate_embedding
+                self.positional_embedding = original_model.positional_embedding
+                self.conv1 = original_model.conv1
+                self.bn1 = original_model.bn1
+                self.conv2 = original_model.conv2
+                self.bn2 = original_model.bn2
+                self.conv3 = original_model.conv3
+                self.bn3 = original_model.bn3
+                self.dropout = original_model.dropout
+                self.global_pool = original_model.global_pool
+                
+            def forward(self, x):
+                # Follow the same forward pass but stop before classifier
+                x = self.microstate_embedding(x)
+                x = x + self.positional_embedding.unsqueeze(0)
+                x = x.transpose(1, 2)
+                
+                x = F.relu(self.bn1(self.conv1(x)))
+                x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+                x = self.dropout(x)
+                
+                x = F.relu(self.bn2(self.conv2(x)))
+                x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+                x = self.dropout(x)
+                
+                x = F.relu(self.bn3(self.conv3(x)))
+                x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+                x = self.dropout(x)
+                
+                x = self.global_pool(x).squeeze(-1)  # This is our feature vector
+                return x
+                
+        return EmbeddedFeatureExtractor(self.backbone)
+    
+    def _create_attention_feature_extractor(self):
+        """Create feature extractor for AttentionMicroSNet"""
+        class AttentionFeatureExtractor(nn.Module):
+            def __init__(self, original_model):
+                super().__init__()
+                self.microstate_embedding = original_model.microstate_embedding
+                self.positional_encoding = original_model.positional_encoding
+                self.transition_branch = original_model.transition_branch
+                self.duration_branch = original_model.duration_branch
+                self.phase_branch = original_model.phase_branch
+                self.context_branch = original_model.context_branch
+                self.transformer_branch = original_model.transformer_branch
+                self.local_attention = original_model.local_attention
+                self.local_attention_proj = original_model.local_attention_proj
+                self.feature_fusion = original_model.feature_fusion
+                
+            def forward(self, x):
+                # Follow the same forward pass but stop before classifier
+                embedded = self.microstate_embedding(x)
+                embedded = self.positional_encoding(embedded)
+                cnn_input = embedded.transpose(1, 2)
+                
+                # Process all branches
+                x1 = self.transition_branch(cnn_input)
+                x2 = self.duration_branch(cnn_input)
+                x3 = self.phase_branch(cnn_input)
+                x4 = self.context_branch(cnn_input)
+                x5 = self.transformer_branch(embedded)
+                x6_attended = self.local_attention(embedded)
+                x6 = self.local_attention_proj(torch.mean(x6_attended, dim=1))
+                
+                # Combine features
+                combined_features = torch.cat([x1, x2, x3, x4, x5, x6], dim=1)
+                fused_features = self.feature_fusion(combined_features)
+                return fused_features
+                
+        return AttentionFeatureExtractor(self.backbone)
+    
+    def _create_lightweight_attention_feature_extractor(self):
+        """Create feature extractor for LightweightAttentionMicroSNet"""
+        class LightweightAttentionFeatureExtractor(nn.Module):
+            def __init__(self, original_model):
+                super().__init__()
+                self.microstate_embedding = original_model.microstate_embedding
+                self.positional_encoding = original_model.positional_encoding
+                self.local_cnn = original_model.local_cnn
+                self.transformer = original_model.transformer
+                self.transformer_proj = original_model.transformer_proj
+                
+            def forward(self, x):
+                embedded = self.positional_encoding(self.microstate_embedding(x))
+                
+                # CNN branch
+                cnn_out = self.local_cnn(embedded.transpose(1, 2))
+                
+                # Transformer branch
+                transformer_out = self.transformer(embedded)
+                transformer_pooled = torch.mean(transformer_out, dim=1)
+                transformer_features = self.transformer_proj(transformer_pooled)
+                
+                # Combine features (this is our feature vector)
+                combined = torch.cat([cnn_out, transformer_features], dim=1)
+                return combined
+                
+        return LightweightAttentionFeatureExtractor(self.backbone)
+    
+    def _create_generic_feature_extractor(self):
+        """Create feature extractor for other models (MicroSNet, MultiScaleMicroSNet)"""
+        # Remove the final classification layer
+        if hasattr(self.backbone, 'classifier'):
+            modules = [module for name, module in self.backbone.named_children() 
+                      if name != 'classifier']
+        elif hasattr(self.backbone, 'final_layer'):
+            modules = list(self.backbone.children())[:-1]
+        else:
+            modules = list(self.backbone.children())[:-1]
+            
+        return nn.Sequential(*modules)
+            
     def forward(self, x):
         with torch.no_grad():
             features = self.feature_extractor(x)
+            # Ensure features are 2D (batch_size, feature_dim)
             if len(features.shape) > 2:
-                # Global average pooling
-                features = F.adaptive_avg_pool1d(features.flatten(1, 2), 1).squeeze(-1)
+                # Global average pooling for any remaining spatial dimensions
+                while len(features.shape) > 2:
+                    features = F.adaptive_avg_pool1d(features.flatten(-2, -1), 1).squeeze(-1)
             return features
 
 class MultiModalClassifier(nn.Module):
