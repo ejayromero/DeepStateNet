@@ -47,8 +47,8 @@ project_root = os.path.dirname(os.path.dirname(script_dir))  # Up 2 levels: Code
 data_path = os.path.join(project_root, 'Data') + os.sep
 output_folder = os.path.join(project_root, 'Output') + os.sep
 
-type_of_subject = 'dependent_harmonize'  # 'independent' or 'adaptive'
-model_name = 'embedded_microsnet'  # 'microsnet' or 'multiscale_microsnet'
+type_of_subject = 'dependent'  # 'independent' or 'adaptive'
+model_name = 'attention_microsnet'  # 'microsnet' or 'multiscale_microsnet'
 output_path = f'{output_folder}ica_rest_all/{type_of_subject}/'
 input_path = f'{output_folder}ica_rest_all/'
 # Making sure all paths exist
@@ -64,7 +64,7 @@ batch_size = 32
 subject_list = list(range(n_subjects))
 all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path)
 mf.print_memory_status("- AFTER DATA LOADING") 
-if 'embedded' in model_name:
+if 'embedded' in model_name or 'attention' in model_name:
     kmeans_path = os.path.join(input_path, 'modkmeans_results', 'modkmeans_sequence')
     ms_timeseries_path = os.path.join(kmeans_path, 'modkmeans_sequence_indiv.pkl')
 else:
