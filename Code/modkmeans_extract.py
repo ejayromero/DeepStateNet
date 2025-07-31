@@ -117,7 +117,7 @@ for i in range(n_subjects):
             scores["Davies-Bouldin"][k] = davies_bouldin_score(ModK)
             print(f"    Davies-Bouldin: {scores['Davies-Bouldin'][k]:.3f}")
             scores["Inv-Davies-Bouldin"][k] = 1 / (1 + scores["Davies-Bouldin"][k])
-            print(f"    Invert Davies-Bouldin: {scores["Inv-Davies-Bouldin"][k]:.3f}")
+            print(f"    Invert Davies-Bouldin: {scores['Inv-Davies-Bouldin'][k]:.3f}")
 
             scores["Spatial_correlation"][k] = modkmeans_exact_spatial_score(ModK)
             print(f"    Spatial Correlation Consistency: {scores['Spatial_correlation'][k]:.3f}")
