@@ -199,6 +199,44 @@ def get_best_k_clusters(all_topographies, max_k=10):
         
     return best_k, all_scores
 
+def load_all_one_subject_data(subject_id, data_path='../../Data/'):
+    """
+    Load data for a single subject.
+    
+    Parameters:
+        subject_id (int): Subject index to load data for.
+        data_path (str): Path to the data directory.
+        
+    Returns:
+        tuple: A tuple containing:
+            - data: Loaded data array for the subject.
+            - labels: Labels for the subject's data.
+    """
+    folder_path = 'ica_rest_close/'
+    id_name = f'{subject_id:03d}'  # Format id as three digits
+    file_name = f's{id_name}.npy'
+    data_close = get_file_path(data_path, folder_path, file_name)
+    data_close = np.array(data_close)  # Ensure data is numpy array
+    
+    file_name_y = f'y{id_name}.npy'
+    labels_close = get_file_path(data_path, folder_path, file_name_y)
+    labels_close = np.array(labels_close)  # Ensure labels are numpy array
+    for i in range(len(labels_close)):
+        if labels_close[i] == 1:
+            labels_close[i] = 2  # Convert 'open' to 'close'
+
+    folder_path = 'ica_rest_open/'
+    data_open = get_file_path(data_path, folder_path, file_name)
+    data_open = np.array(data_open)  # Ensure data is numpy array
+    labels_open = get_file_path(data_path, folder_path, file_name_y)
+    labels_open = np.array(labels_open)  # Ensure labels are numpy array
+    # Concatenate data and labels
+    data = np.concatenate((data_close, data_open), axis=0)
+    labels = np.concatenate((labels_close, labels_open), axis=0)
+    data = np.array(data)  # Ensure data is numpy array
+    labels = np.array(labels)  # Ensure labels are numpy array
+    return data, labels
+
 def load_all_data(subjects_list=None, do_all=False, data_path='../../Data/',output_folder='../../Output/'):
     """
     Load all data from the specified subjects.
