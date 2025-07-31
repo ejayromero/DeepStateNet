@@ -16,21 +16,25 @@ from pycrostates.metrics import (
 
 n_clusters = 5 
 n_subjects = 50  # Number of subjects
+n_init = 50
+max_iter =200
 do_all = False  # If True, process all subjects together
 input_path = 'Output/ica_rest_all'
-
+if not os.path.exists(input_path):
+    os.makedirs(input_path)
 gfp_path = os.path.join(input_path, 'gfp_peaks')
 results_path = os.path.join(input_path, 'kmeans_results.npy')
 epochs_path = os.path.join(input_path, 'epochs')
-
-
+modkmeans_path = os.path.join(input_path, 'modkmeans_results')
+if not os.path.exists(modkmeans_path):
+    os.makedirs(modkmeans_path)
 for i in range(50):
     print(f"Processing subject {i}")
     if do_all:
         id_name = '_all'
     else:
         id_name = f'{i:03d}'
-    results_path = os.path.join(input_path, f'modkmeans_results/modkmeans_s{id_name}.npy')
+    results_path = os.path.join(input_path, modkmeans_path,f'modkmeans_s{id_name}.npy')
     if os.path.exists(results_path):
         print(f"Results for subject {i} already exist at {results_path}. Skipping.")
         continue
@@ -71,7 +75,7 @@ for i in range(50):
     }
 
     # modkmeans = ModKMeans(n_clusters=n_clusters, n_init=50, max_iter=200, random_state=42)
-    modkmeans = ModKMeans(n_clusters=n_clusters, random_state=42)
+    modkmeans = ModKMeans(n_clusters=n_clusters, n_init=n_init, max_iter=max_iter, random_state=42)
     # Fit the model to the data
     print(f"Fitting ModKMeans for subject {i} with {n_clusters} clusters")
     modkmeans.fit(gfp_peaks, n_jobs=-1, verbose='INFO')
