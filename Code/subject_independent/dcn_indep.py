@@ -53,6 +53,7 @@ if not os.path.exists(output_path):
 do_all = False
 n_subjects = 50
 # excluded_from_training = [2, 12, 14, 20, 22, 23, 30, 39, 46]
+excluded_from_training = [-1]
 num_epochs = 100
 subject_list = list(range(n_subjects))
 all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path)
@@ -136,7 +137,7 @@ for test_id in test_subjects:
     # ---------- Model ----------
     base_model = Deep4Net(
         n_chans=x_train.shape[1],
-        n_classes=len(torch.unique(y_train)),
+        n_outputs=len(torch.unique(y_train)),
         input_window_samples=x_train.shape[2],
         final_conv_length='auto'
     )
