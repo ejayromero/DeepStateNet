@@ -77,7 +77,7 @@ for i in range(n_subjects):
     # scores = {
     #     "GEV": [],
     #     "Silhouette": [],
-    #     "Calinski-Harabasaz": [],
+    #     "Calinski-Harabasz": [],
     #     "Dunn": [],
     #     "Davies-Bouldin": []
     # }
@@ -86,12 +86,14 @@ for i in range(n_subjects):
         scores = {
             "GEV": np.zeros(len(cluster_numbers)),
             # "Silhouette": np.zeros(len(cluster_numbers)),
-            "Calinski-Harabasaz": np.zeros(len(cluster_numbers)),
+            "Calinski-Harabasz": np.zeros(len(cluster_numbers)),
             # "Dunn": np.zeros(len(cluster_numbers)),
             "Davies-Bouldin": np.zeros(len(cluster_numbers)),
             "Inv-Davies-Bouldin": np.zeros(len(cluster_numbers)),
             "Spatial_correlation": np.zeros(len(cluster_numbers))
         }
+        modkmeans = []
+        microstate_sequences = []
 
         for k, n_clusters in enumerate(cluster_numbers):
             print(f'Processing subject {id_name}, number of clusters: {n_clusters}')
@@ -108,8 +110,8 @@ for i in range(n_subjects):
             # scores["Silhouette"][k] = silhouette_score(ModK)
             # print(f"    Silhouette: {scores['Silhouette'][k]:.3f}")
 
-            scores["Calinski-Harabasaz"][k] = calinski_harabasz_score(ModK)
-            print(f"    Calinski-Harabasz: {scores['Calinski-Harabasaz'][k]:.3f}")
+            scores["Calinski-Harabasz"][k] = calinski_harabasz_score(ModK)
+            print(f"    Calinski-Harabasz: {scores['Calinski-Harabasz'][k]:.3f}")
 
             # scores["Dunn"][k] = dunn_score(ModK)
             # print(f"    Dunn: {scores['Dunn'][k]:.3f}")
@@ -122,59 +124,66 @@ for i in range(n_subjects):
             scores["Spatial_correlation"][k] = modkmeans_exact_spatial_score(ModK)
             print(f"    Spatial Correlation Consistency: {scores['Spatial_correlation'][k]:.3f}")
 
+            microstate_sequence = ModK.predict(epochs, reject_by_annotation=True, factor=10,
+                                half_window_size=10, min_segment_length=5,
+                                reject_edges=True)
+            modkmeans.append(ModK)
+            microstate_sequences.append(microstate_sequence)
+
         # invert davies-bouldin scores
         # scores["Davies-Bouldin"] = 1 / (1 + scores["Davies-Bouldin"])
 
         kmeans_results = {
+            'cluster_number': cluster_numbers,
             'scores': scores,
             'kmeans_model': modkmeans,
-            'microstate_sequence': microstate_sequence
+            'microstate_sequence': microstate_sequences
         }
         # normalize scores using sklearn
 
         normalized_scores = {score: normalize(value[:, np.newaxis], axis=0).ravel()
                 for score, value in scores.items()
-                if score != "GEV"}  # Normalize all scores except GEV
+                if score != "GEV" and score != "Spatial_correlation"}  # Normalize all scores except GEV
+        normalized_scores['GEV'] = scores['GEV']
+        normalized_scores['Spatial_correlation'] = scores['Spatial_correlation']
 
 
-
-        # set width of a bar and define colors
-        barWidth = 0.18
-        colors = sns.color_palette('colorblind', len(normalized_scores))  # Microstate colors
-        print('Making Score Summary plot')
-        # create figure
-        plt.figure(figsize=(10, 8))
-        # create the position of the bars on the X-axis
-        x = [[elt + k * barWidth for elt in np.arange(len(cluster_numbers))]
-            for k in range(len(normalized_scores))]
-        # create plots
-        for k, (score, values) in enumerate(normalized_scores.items()):
-            plt.bar(
-                x=x[k],
-                height=values,
-                width=barWidth,
-                edgecolor="grey",
-                color=colors[k],
-                label=score,
-            )
-        # add labels and legend
-        plt.title(f's{id}: Clustering scores for different number of clusters')
-        plt.xlabel("Number of clusters")
-        plt.ylabel("Score normalize to unit norm")
-        plt.xticks(
-            [pos + 1.5 * barWidth for pos in range(len(cluster_numbers))],
-            [str(k) for k in cluster_numbers],
-        )
-        plt.ylim(0, 1.1)  # Set y-axis limit to 0-1
-        plt.legend()
-        plt.tight_layout()
-        # save the model
-        id_name = f'{id:03d}'  # Format id as three digits
-        output_im_score = os.path.join(modkmeans_path, 'scores', f'Cluster_score_s{id_name}.png')
-        if not os.path.exists(os.path.join(modkmeans_path, 'scores')):
-            os.makedirs(os.path.join(modkmeans_path, 'scores'))
-        plt.savefig(output_im_score, dpi=300, bbox_inches='tight')
-        plt.close()
+        # # set width of a bar and define colors
+        # barWidth = 0.18
+        # colors = sns.color_palette('colorblind', len(normalized_scores))  # Microstate colors
+        # print('Making Score Summary plot')
+        # # create figure
+        # plt.figure(figsize=(10, 8))
+        # # create the position of the bars on the X-axis
+        # x = [[elt + k * barWidth for elt in np.arange(len(cluster_numbers))]
+        #     for k in range(len(normalized_scores))]
+        # # create plots
+        # for k, (score, values) in enumerate(normalized_scores.items()):
+        #     plt.bar(
+        #         x=x[k],
+        #         height=values,
+        #         width=barWidth,
+        #         edgecolor="grey",
+        #         color=colors[k],
+        #         label=score,
+        #     )
+        # # add labels and legend
+        # plt.title(f's{id_name}: Clustering scores for different number of clusters')
+        # plt.xlabel("Number of clusters")
+        # plt.ylabel("Score normalize to unit norm")
+        # plt.xticks(
+        #     [pos + 1.5 * barWidth for pos in range(len(cluster_numbers))],
+        #     [str(k) for k in cluster_numbers],
+        # )
+        # plt.ylim(0, 1.1)  # Set y-axis limit to 0-1
+        # plt.legend()
+        # plt.tight_layout()
+        # # save the model
+        # output_im_score = os.path.join(modkmeans_path, 'scores', f'Cluster_score_s{id_name}.png')
+        # if not os.path.exists(os.path.join(modkmeans_path, 'scores')):
+        #     os.makedirs(os.path.join(modkmeans_path, 'scores'))
+        # plt.savefig(output_im_score, dpi=300, bbox_inches='tight')
+        # plt.close()
 
     else:
         # modkmeans = ModKMeans(n_clusters=n_clusters, n_init=50, max_iter=200, random_state=42)
@@ -192,7 +201,7 @@ for i in range(n_subjects):
     # print(f"Computing scores for subject {i}")
     # scores["GEV"] = modkmeans.GEV_
     # scores["Silhouette"] = silhouette_score(modkmeans)
-    # scores["Calinski-Harabasaz"] = calinski_harabasz_score(modkmeans)
+    # scores["Calinski-Harabasz"] = calinski_harabasz_score(modkmeans)
     # scores["Dunn"] = dunn_score(modkmeans)
     # scores["Davies-Bouldin"] = davies_bouldin_score(modkmeans)
     
@@ -215,4 +224,5 @@ for i in range(n_subjects):
     # }
     np.save(results_path, kmeans_results)
     print(f"Results saved to {results_path} at subject {i}")
+    del kmeans_results
 print("All subjects processed and results saved successfully.")
