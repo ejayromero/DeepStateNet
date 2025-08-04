@@ -64,8 +64,8 @@ num_epochs = 50
 batch_size = 32  # or 256 if memory allows
 excluded_from_training = [-1]  # No exclusions for adaptive clean
 subject_list = list(range(n_subjects))
-all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path)
-del all_data  # Free memory after loading data
+_, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path)
+
 
 # Choose appropriate data file based on model type
 if 'embedded' in model_name or 'attention' in model_name:

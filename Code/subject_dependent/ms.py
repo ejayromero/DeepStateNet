@@ -60,9 +60,9 @@ n_subjects = 50
 num_epochs = 50
 batch_size = 32  # or 256 if memory allows
 subject_list = list(range(n_subjects))
-all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path, output_folder=output_folder)
+_, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path, output_folder=output_folder)
 mf.print_memory_status("- AFTER DATA LOADING") 
-del all_data # Free memory after loading data
+
 if 'embedded' in model_name:
     kmeans_path = os.path.join(input_path, 'modkmeans_results', 'modkmeans_sequence')
     ms_timeseries_path = os.path.join(kmeans_path, 'modkmeans_sequence_indiv.pkl')
