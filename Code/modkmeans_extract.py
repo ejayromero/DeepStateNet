@@ -136,8 +136,8 @@ for i in range(n_subjects):
         kmeans_results = {
             'cluster_number': cluster_numbers,
             'scores': scores,
-            'kmeans_model': modkmeans,
-            'microstate_sequence': microstate_sequences
+            # 'kmeans_model': modkmeans,
+            # 'microstate_sequence': microstate_sequences
         }
         # normalize scores using sklearn
 
