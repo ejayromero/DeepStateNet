@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.my_stats_functions import modkmeans_exact_spatial_score
 
-n_clusters = 10
+n_clusters = 12
 max_k_clusters = 50  # Maximum number of clusters to evaluate
 cluster_numbers = range(4, max_k_clusters + 1)  # Range of cluster numbers to evaluate
 n_subjects = 50  # Number of subjects
@@ -23,7 +23,7 @@ max_iter =300
 do_all = False  # If True, process all subjects together
 random_state = 42
 
-find_best_k = True
+find_best_k = False
 input_path = os.path.abspath('Output/ica_rest_all')
 if not os.path.exists(input_path):
     os.makedirs(input_path)
@@ -74,13 +74,7 @@ for i in range(n_subjects):
     with open(os.path.join(epochs_path, f'epochs_s{id_name}.pkl'), 'rb') as f:
         epochs = pickle.load(f)
 
-    # scores = {
-    #     "GEV": [],
-    #     "Silhouette": [],
-    #     "Calinski-Harabasz": [],
-    #     "Dunn": [],
-    #     "Davies-Bouldin": []
-    # }
+    
 
     if find_best_k:
         scores = {
@@ -186,29 +180,47 @@ for i in range(n_subjects):
         # plt.close()
 
     else:
+        scores = {
+            "GEV": [],
+            "Davies-Bouldin": [],
+            "Inv-Davies-Bouldin": [],
+            "Spatial_correlation": []
+        }
         # modkmeans = ModKMeans(n_clusters=n_clusters, n_init=50, max_iter=200, random_state=42)
-        modkmeans = ModKMeans(n_clusters=n_clusters, n_init=n_init, max_iter=max_iter, random_state=random_state)
+        ModK = ModKMeans(n_clusters=n_clusters, n_init=n_init, max_iter=max_iter, random_state=random_state)
         # Fit the model to the data
         print(f"Fitting ModKMeans for subject {i} with {n_clusters} clusters")
-        modkmeans.fit(gfp_peaks, n_jobs=-1, verbose='INFO')
+        ModK.fit(gfp_peaks, n_jobs=-1, verbose='INFO')
         print(f"Model fitted for subject {i}")
         # Predict microstate sequence for all epochs
-        microstate_sequence = modkmeans.predict(epochs, reject_by_annotation=True, factor=10,
+        microstate_sequence = ModK.predict(epochs, reject_by_annotation=True, factor=10,
                                 half_window_size=10, min_segment_length=5,
                                 reject_edges=True)
+        
+        scores["GEV"] = ModK.GEV_
+        print(f"    GEV: {scores['GEV']:.3f}")
 
-    # compute scores
-    # print(f"Computing scores for subject {i}")
-    # scores["GEV"] = modkmeans.GEV_
-    # scores["Silhouette"] = silhouette_score(modkmeans)
-    # scores["Calinski-Harabasz"] = calinski_harabasz_score(modkmeans)
-    # scores["Dunn"] = dunn_score(modkmeans)
-    # scores["Davies-Bouldin"] = davies_bouldin_score(modkmeans)
-    
+        # scores["Silhouette"][k] = silhouette_score(ModK)
+        # print(f"    Silhouette: {scores['Silhouette'][k]:.3f}")
+
+        scores["Calinski-Harabasz"] = calinski_harabasz_score(ModK)
+        print(f"    Calinski-Harabasz: {scores['Calinski-Harabasz']:.3f}")
+
+        # scores["Dunn"][k] = dunn_score(ModK)
+        # print(f"    Dunn: {scores['Dunn'][k]:.3f}")
+
+        scores["Davies-Bouldin"] = davies_bouldin_score(ModK)
+        print(f"    Davies-Bouldin: {scores['Davies-Bouldin']:.3f}")
+        scores["Inv-Davies-Bouldin"] = 1 / (1 + scores["Davies-Bouldin"])
+        print(f"    Invert Davies-Bouldin: {scores['Inv-Davies-Bouldin']:.3f}")
+
+        scores["Spatial_correlation"] = modkmeans_exact_spatial_score(ModK)
+        print(f"    Spatial Correlation Consistency: {scores['Spatial_correlation']:.3f}")
+
     # Save results in a dictionary
         kmeans_results = {
-            # 'scores': scores,
-            'kmeans_model': modkmeans,
+            'scores': scores,
+            'kmeans_model': ModK,
             'microstate_sequence': microstate_sequence
         }
     # all_subjects.append(i)
