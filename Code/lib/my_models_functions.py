@@ -131,27 +131,27 @@ def plot_cv_results(all_results, output_path, type_of_subject, model_name, n_sub
     
     # Test Balanced Accuracy
     axes[0, 0].plot(all_test_balanced_accs, marker='o', linestyle='-', color=colors[0], label='Test', linewidth=2)
-    axes[0, 0].plot(all_cv_balanced_accs, marker='s', linestyle='--', color=colors[3], label='CV Mean', linewidth=2)
+    axes[0, 0].plot(all_cv_balanced_accs, marker='s', linestyle='--', color=colors[0], alpha=0.5, label='CV Mean', linewidth=2)
     axes[0, 0].set_title(f'Test vs CV Balanced Accuracy')
     axes[0, 0].set_xlabel('Subject ID')
     axes[0, 0].set_ylabel('Balanced Accuracy (%)')
-    axes[0, 0].set_ylim(0, 100)
+    axes[0, 0].set_ylim(0, 102)
     axes[0, 0].legend()
     axes[0, 0].set_xticks(range(0, n_subjects, max(1, n_subjects//10)))  # Show every 5th or 10th subject
     axes[0, 0].set_xticklabels([f'S{i}' for i in range(0, n_subjects, max(1, n_subjects//10))], rotation=45)
-    axes[0, 0].grid(True, alpha=0.3)
+    # axes[0, 0].grid(True, alpha=0.3)
     
     # Test F1 Macro
     axes[0, 1].plot(all_test_f1s, marker='o', linestyle='-', color=colors[1], label='Test', linewidth=2)
-    axes[0, 1].plot(all_cv_f1s, marker='s', linestyle='--', color=colors[4], label='CV Mean', linewidth=2)
+    axes[0, 1].plot(all_cv_f1s, marker='s', linestyle='--', color=colors[1], alpha=0.5, label='CV Mean', linewidth=2)
     axes[0, 1].set_title(f'Test vs CV F1 Macro')
     axes[0, 1].set_xlabel('Subject ID')
     axes[0, 1].set_ylabel('F1 Macro (%)')
-    axes[0, 1].set_ylim(0, 100)
+    axes[0, 1].set_ylim(0, 102)
     axes[0, 1].legend()
     axes[0, 1].set_xticks(range(0, n_subjects, max(1, n_subjects//10)))
     axes[0, 1].set_xticklabels([f'S{i}' for i in range(0, n_subjects, max(1, n_subjects//10))], rotation=45)
-    axes[0, 1].grid(True, alpha=0.3)
+    # axes[0, 1].grid(True, alpha=0.3)
     
     # CV Validation Scores Distribution
     all_cv_individual_scores = []
@@ -162,8 +162,8 @@ def plot_cv_results(all_results, output_path, type_of_subject, model_name, n_sub
     axes[1, 0].set_title('Distribution of CV Fold Balanced Accuracies')
     axes[1, 0].set_xlabel('Balanced Accuracy (%)')
     axes[1, 0].set_ylabel('Frequency')
-    axes[1, 0].set_xlim(0, 100)
-    axes[1, 0].grid(True, alpha=0.3)
+    axes[1, 0].set_xlim(0, 102)
+    # axes[1, 0].grid(True, alpha=0.3)
     
     # Test vs CV correlation
     axes[1, 1].scatter(all_cv_balanced_accs, all_test_balanced_accs, alpha=0.6, color=colors[5], s=60)
@@ -171,9 +171,9 @@ def plot_cv_results(all_results, output_path, type_of_subject, model_name, n_sub
     axes[1, 1].set_title('CV vs Test Balanced Accuracy Correlation')
     axes[1, 1].set_xlabel('CV Mean Balanced Accuracy (%)')
     axes[1, 1].set_ylabel('Test Balanced Accuracy (%)')
-    axes[1, 1].set_xlim(0, 100)
-    axes[1, 1].set_ylim(0, 100)
-    axes[1, 1].grid(True, alpha=0.3)
+    axes[1, 1].set_xlim(0, 102)
+    axes[1, 1].set_ylim(0, 102)
+    # axes[1, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_path, f'{type_of_subject}_{model_name}_CV_test_metrics.png'), dpi=300, bbox_inches='tight')
@@ -231,16 +231,16 @@ def plot_training_curves(all_results, output_path, type_of_subject, model_name):
                            train_bal_accs_mean + train_bal_accs_std, alpha=0.3, color=colors[0])
     axes[0, 0].set_title('Training Balanced Accuracy')
     axes[0, 0].set_ylabel('Balanced Accuracy (%)')
-    axes[0, 0].set_ylim(0, 100)
-    axes[0, 0].grid(True, alpha=0.3)
+    axes[0, 0].set_ylim(0, 102)
+    # axes[0, 0].grid(True, alpha=0.3)
     
     axes[0, 1].plot(epochs, val_bal_accs_mean, color=colors[1], linewidth=2, label='Validation')
     axes[0, 1].fill_between(epochs, val_bal_accs_mean - val_bal_accs_std, 
                            val_bal_accs_mean + val_bal_accs_std, alpha=0.3, color=colors[1])
     axes[0, 1].set_title('Validation Balanced Accuracy (CV)')
     axes[0, 1].set_ylabel('Balanced Accuracy (%)')
-    axes[0, 1].set_ylim(0, 100)
-    axes[0, 1].grid(True, alpha=0.3)
+    axes[0, 1].set_ylim(0, 102)
+    # axes[0, 1].grid(True, alpha=0.3)
     
     # F1 Macro
     axes[1, 0].plot(epochs, train_f1s_mean, color=colors[2], linewidth=2, label='Train F1')
@@ -248,16 +248,16 @@ def plot_training_curves(all_results, output_path, type_of_subject, model_name):
                            train_f1s_mean + train_f1s_std, alpha=0.3, color=colors[2])
     axes[1, 0].set_title('Training F1 Macro')
     axes[1, 0].set_ylabel('F1 Macro (%)')
-    axes[1, 0].set_ylim(0, 100)
-    axes[1, 0].grid(True, alpha=0.3)
+    axes[1, 0].set_ylim(0, 102)
+    # axes[1, 0].grid(True, alpha=0.3)
     
     axes[1, 1].plot(epochs, val_f1s_mean, color=colors[3], linewidth=2, label='Val F1')
     axes[1, 1].fill_between(epochs, val_f1s_mean - val_f1s_std, 
                            val_f1s_mean + val_f1s_std, alpha=0.3, color=colors[3])
     axes[1, 1].set_title('Validation F1 Macro (CV)')
     axes[1, 1].set_ylabel('F1 Macro (%)')
-    axes[1, 1].set_ylim(0, 100)
-    axes[1, 1].grid(True, alpha=0.3)
+    axes[1, 1].set_ylim(0, 102)
+    # axes[1, 1].grid(True, alpha=0.3)
     
     # Loss - with shared y-axis for better comparison
     loss_min = min(np.min(train_losses_mean), np.min(val_losses_mean))
@@ -269,8 +269,8 @@ def plot_training_curves(all_results, output_path, type_of_subject, model_name):
     axes[2, 0].set_title('Training Loss')
     axes[2, 0].set_ylabel('Loss')
     axes[2, 0].set_xlabel('Epoch')
-    axes[2, 0].set_ylim(loss_min * 0.9, loss_max * 1.1)
-    axes[2, 0].grid(True, alpha=0.3)
+    axes[2, 0].set_ylim(loss_min * 0.9, loss_max * 1.5)
+    # axes[2, 0].grid(True, alpha=0.3)
     
     axes[2, 1].plot(epochs, val_losses_mean, color=colors[5], linewidth=2, label='Val Loss')
     axes[2, 1].fill_between(epochs, val_losses_mean - val_losses_std, 
@@ -278,8 +278,8 @@ def plot_training_curves(all_results, output_path, type_of_subject, model_name):
     axes[2, 1].set_title('Validation Loss (CV)')
     axes[2, 1].set_ylabel('Loss')
     axes[2, 1].set_xlabel('Epoch')
-    axes[2, 1].set_ylim(loss_min * 0.9, loss_max * 1.1)
-    axes[2, 1].grid(True, alpha=0.3)
+    axes[2, 1].set_ylim(loss_min * 0.9, loss_max * 1.5)
+    # axes[2, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_path, f'{type_of_subject}_{model_name}_CV_training_curves.png'), dpi=300, bbox_inches='tight')
@@ -306,11 +306,13 @@ def plot_confusion_matrix(all_results, output_path, type_of_subject, model_name)
         
     all_conf_matrices = [result['confusion_matrix'] for result in all_results]
     avg_conf_matrix = np.mean(all_conf_matrices, axis=0)
-    
+    # To normalize by row (show percentage of true class predictions)
+    conf_matrix_pct = avg_conf_matrix.astype('float') / avg_conf_matrix.sum(axis=1)[:, np.newaxis]
+    name_classes = {0: 'rest', 1: 'open', 2: 'close'}
     plt.figure(figsize=(8, 6))
-    sns.heatmap(avg_conf_matrix, annot=True, fmt='.1f', cmap='Blues', 
-                xticklabels=[f'Class {i}' for i in range(avg_conf_matrix.shape[1])],
-                yticklabels=[f'Class {i}' for i in range(avg_conf_matrix.shape[0])])
+    sns.heatmap(conf_matrix_pct, annot=True, fmt='.2f', cmap='Blues', 
+                xticklabels=[name_classes[i] for i in range(conf_matrix_pct.shape[1])],
+                yticklabels=[name_classes[i] for i in range(conf_matrix_pct.shape[0])])
     plt.title(f'Average Confusion Matrix - {type_of_subject} {model_name.upper()} (Test Set)')
     plt.ylabel('True Label')
     plt.xlabel('Predicted Label')
