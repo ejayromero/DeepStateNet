@@ -4,11 +4,8 @@ With K-fold cross-validation, balanced accuracy, F1 scores, and single-subject l
 '''
 import os
 import sys
-import pickle
 import argparse
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set_theme(style="darkgrid")
 
@@ -20,106 +17,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.model_selection import train_test_split, StratifiedKFold
-from sklearn.metrics import balanced_accuracy_score, f1_score, confusion_matrix
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib import my_functions as mf
-
-
-def train_epoch(model, device, train_loader, optimizer, criterion, epoch, log_interval=10):
-    """Train the model for one epoch"""
-    model.train()
-    train_loss = 0
-    train_total = 0
-    all_preds = []
-    all_targets = []
-    
-    for batch_idx, (data, target) in enumerate(train_loader):
-        data, target = data.to(device), target.to(device)
-        optimizer.zero_grad()
-        output = model(data)
-        loss = criterion(output, target)
-        loss.backward()
-        optimizer.step()
-        
-        train_loss += loss.item() * data.size(0)
-        pred = output.argmax(dim=1)
-        train_total += target.size(0)
-        
-        # Store predictions and targets for metric computation
-        all_preds.extend(pred.cpu().numpy())
-        all_targets.extend(target.cpu().numpy())
-        
-        # if batch_idx % log_interval == 0:
-        #     print(f'Train Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)} '
-        #           f'({100. * batch_idx / len(train_loader):.0f}%)]\tLoss: {loss.item():.6f}')
-    
-    avg_loss = train_loss / train_total
-    balanced_acc = balanced_accuracy_score(all_targets, all_preds) * 100
-    f1_macro = f1_score(all_targets, all_preds, average='macro') * 100
-    
-    return avg_loss, balanced_acc, f1_macro
-
-
-def validate(model, device, val_loader, criterion):
-    """Validate the model"""
-    model.eval()
-    val_loss = 0
-    total = 0
-    all_preds = []
-    all_targets = []
-    
-    with torch.no_grad():
-        for data, target in val_loader:
-            data, target = data.to(device), target.to(device)
-            output = model(data)
-            val_loss += criterion(output, target).item() * data.size(0)
-            pred = output.argmax(dim=1)
-            total += target.size(0)
-            
-            # Store predictions and targets for metric computation
-            all_preds.extend(pred.cpu().numpy())
-            all_targets.extend(target.cpu().numpy())
-    
-    avg_loss = val_loss / total
-    balanced_acc = balanced_accuracy_score(all_targets, all_preds) * 100
-    f1_macro = f1_score(all_targets, all_preds, average='macro') * 100
-    
-    # print(f'Validation set: Average loss: {avg_loss:.4f}, '
-    #       f'Balanced Accuracy: {balanced_acc:.2f}%, F1 Macro: {f1_macro:.2f}%')
-    
-    return avg_loss, balanced_acc, f1_macro
-
-
-def test(model, device, test_loader):
-    """Test the model"""
-    model.eval()
-    test_loss = 0
-    total = 0
-    all_preds = []
-    all_targets = []
-    
-    with torch.no_grad():
-        for data, target in test_loader:
-            data, target = data.to(device), target.to(device)
-            output = model(data)
-            test_loss += F.nll_loss(output, target, reduction='sum').item()
-            pred = output.argmax(dim=1)
-            total += target.size(0)
-            
-            # Store predictions and targets for metric computation
-            all_preds.extend(pred.cpu().numpy())
-            all_targets.extend(target.cpu().numpy())
-    
-    test_loss /= total
-    balanced_acc = balanced_accuracy_score(all_targets, all_preds) * 100
-    f1_macro = f1_score(all_targets, all_preds, average='macro') * 100
-    conf_matrix = confusion_matrix(all_targets, all_preds)
-    
-    print(f'Test set: Average loss: {test_loss:.4f}, '
-          f'Balanced Accuracy: {balanced_acc:.2f}%, F1 Macro: {f1_macro:.2f}%')
-    
-    return balanced_acc, f1_macro, conf_matrix
+from lib import my_models_functions as mmf 
 
 
 def train_subject(subject_id, args, device, data_path):
@@ -127,7 +28,7 @@ def train_subject(subject_id, args, device, data_path):
     print(f"\n▶ Training Subject {subject_id}")
     
     # Load single subject data for memory efficiency
-    data, y = mf.load_all_one_subject_data(subject_id, data_path=data_path)
+    data, y = mf.load_data(subject_id, data_path=data_path)
     x = torch.tensor(data, dtype=torch.float32).squeeze(1)  # (n_trials, n_channels, timepoints)
     y = torch.tensor(y, dtype=torch.long)
     
@@ -192,13 +93,13 @@ def train_subject(subject_id, args, device, data_path):
         fold_train_f1s, fold_val_f1s = [], []
         
         for epoch in range(1, args.epochs + 1):
-            # Train
-            train_loss, train_balanced_acc, train_f1 = train_epoch(
+            # Train - USING SHARED FUNCTION
+            train_loss, train_balanced_acc, train_f1 = mmf.train_epoch(
                 net, device, train_loader, optimizer, criterion, epoch, 
                 args.log_interval if epoch % 10 == 1 else 999)  # Reduce logging frequency
             
-            # Validate
-            val_loss, val_balanced_acc, val_f1 = validate(net, device, val_loader, criterion)
+            # Validate - USING SHARED FUNCTION
+            val_loss, val_balanced_acc, val_f1 = mmf.validate(net, device, val_loader, criterion)
             
             fold_train_losses.append(train_loss)
             fold_train_balanced_accs.append(train_balanced_acc)
@@ -230,45 +131,24 @@ def train_subject(subject_id, args, device, data_path):
         
         print(f"✅ Fold {fold + 1} completed - Val Balanced Acc: {val_balanced_acc:.2f}%, F1: {val_f1:.2f}%")
     
-    # Cross-validation summary
-    mean_cv_bal_acc = np.mean(cv_balanced_accs)
-    std_cv_bal_acc = np.std(cv_balanced_accs)
-    mean_cv_f1 = np.mean(cv_f1_scores)
-    std_cv_f1 = np.std(cv_f1_scores)
-    
-    print(f"\n📊 {args.n_folds}-Fold CV Results Summary:")
-    print(f"CV Balanced Accuracy: {mean_cv_bal_acc:.2f}% ± {std_cv_bal_acc:.2f}%")
-    print(f"CV F1 Macro: {mean_cv_f1:.2f}% ± {std_cv_f1:.2f}%")
+    # Cross-validation summary - USING SHARED FUNCTION
+    mean_cv_bal_acc, std_cv_bal_acc, mean_cv_f1, std_cv_f1 = mmf.print_cv_summary(
+        cv_balanced_accs, cv_f1_scores, args.n_folds)
     
     # Select best fold model (highest validation balanced accuracy)
     best_fold_idx = np.argmax(cv_balanced_accs)
     best_model = fold_results[best_fold_idx]['model']
     print(f"Best fold: {best_fold_idx + 1} (Val Bal Acc: {cv_balanced_accs[best_fold_idx]:.2f}%)")
     
-    # Final test on held-out test set using best model
+    # Final test on held-out test set using best model - USING SHARED FUNCTION
     test_loader = DataLoader(TensorDataset(x_test, y_test), 
                             batch_size=args.batch_size, shuffle=False)
     
-    test_balanced_acc, test_f1, conf_matrix = test(best_model.module, device, test_loader)
+    test_balanced_acc, test_f1, conf_matrix = mmf.test(best_model.module, device, test_loader)
     print(f"🎯 Final Test Results - Balanced Acc: {test_balanced_acc:.2f}%, F1: {test_f1:.2f}%")
     
-    # Aggregate training curves across folds (mean and std)
-    all_epochs = len(fold_results[0]['train_losses'])
-    
-    # Calculate mean and std across folds for each epoch
-    train_losses_mean = np.mean([fold['train_losses'] for fold in fold_results], axis=0)
-    train_losses_std = np.std([fold['train_losses'] for fold in fold_results], axis=0)
-    train_bal_accs_mean = np.mean([fold['train_balanced_accuracies'] for fold in fold_results], axis=0)
-    train_bal_accs_std = np.std([fold['train_balanced_accuracies'] for fold in fold_results], axis=0)
-    train_f1s_mean = np.mean([fold['train_f1_macros'] for fold in fold_results], axis=0)
-    train_f1s_std = np.std([fold['train_f1_macros'] for fold in fold_results], axis=0)
-    
-    val_losses_mean = np.mean([fold['val_losses'] for fold in fold_results], axis=0)
-    val_losses_std = np.std([fold['val_losses'] for fold in fold_results], axis=0)
-    val_bal_accs_mean = np.mean([fold['val_balanced_accuracies'] for fold in fold_results], axis=0)
-    val_bal_accs_std = np.std([fold['val_balanced_accuracies'] for fold in fold_results], axis=0)
-    val_f1s_mean = np.mean([fold['val_f1_macros'] for fold in fold_results], axis=0)
-    val_f1s_std = np.std([fold['val_f1_macros'] for fold in fold_results], axis=0)
+    # Aggregate training curves across folds - USING SHARED FUNCTION
+    training_curves = mmf.aggregate_fold_training_curves(fold_results)
     
     # Clean up memory
     del data, x, y, x_cv, x_test, y_cv, y_test
@@ -288,161 +168,9 @@ def train_subject(subject_id, args, device, data_path):
         'confusion_matrix': conf_matrix,
         'best_fold_idx': best_fold_idx,
         'fold_results': fold_results,
-        # Aggregated training curves
-        'train_losses_mean': train_losses_mean.tolist(),
-        'train_losses_std': train_losses_std.tolist(),
-        'train_balanced_accuracies_mean': train_bal_accs_mean.tolist(),
-        'train_balanced_accuracies_std': train_bal_accs_std.tolist(),
-        'train_f1_macros_mean': train_f1s_mean.tolist(),
-        'train_f1_macros_std': train_f1s_std.tolist(),
-        'val_losses_mean': val_losses_mean.tolist(),
-        'val_losses_std': val_losses_std.tolist(),
-        'val_balanced_accuracies_mean': val_bal_accs_mean.tolist(),
-        'val_balanced_accuracies_std': val_bal_accs_std.tolist(),
-        'val_f1_macros_mean': val_f1s_mean.tolist(),
-        'val_f1_macros_std': val_f1s_std.tolist(),
-        'best_model': best_model
+        'best_model': best_model,
+        **training_curves  # ← UNPACKS ALL TRAINING CURVE DATA
     }
-
-
-def plot_results(all_results, output_path, type_of_subject, n_subjects):
-    """Plot training results with CV"""
-    all_test_balanced_accs = [result['test_balanced_accuracy'] for result in all_results]
-    all_test_f1s = [result['test_f1_macro'] for result in all_results]
-    all_cv_balanced_accs = [result['mean_cv_balanced_acc'] for result in all_results]
-    all_cv_f1s = [result['mean_cv_f1'] for result in all_results]
-    
-    # Plot test metrics vs CV metrics
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-    
-    # Test Balanced Accuracy
-    axes[0, 0].plot(all_test_balanced_accs, marker='o', linestyle='-', color='blue', label='Test')
-    axes[0, 0].plot(all_cv_balanced_accs, marker='s', linestyle='--', color='lightblue', label='CV Mean')
-    axes[0, 0].set_title(f'Test vs CV Balanced Accuracy - {type_of_subject}')
-    axes[0, 0].set_xlabel('Subject ID')
-    axes[0, 0].set_ylabel('Balanced Accuracy (%)')
-    axes[0, 0].legend()
-    axes[0, 0].set_xticks(range(n_subjects))
-    axes[0, 0].set_xticklabels([f'S{i}' for i in range(n_subjects)], rotation=45)
-    
-    # Test F1 Macro
-    axes[0, 1].plot(all_test_f1s, marker='o', linestyle='-', color='red', label='Test')
-    axes[0, 1].plot(all_cv_f1s, marker='s', linestyle='--', color='lightcoral', label='CV Mean')
-    axes[0, 1].set_title(f'Test vs CV F1 Macro - {type_of_subject}')
-    axes[0, 1].set_xlabel('Subject ID')
-    axes[0, 1].set_ylabel('F1 Macro (%)')
-    axes[0, 1].legend()
-    axes[0, 1].set_xticks(range(n_subjects))
-    axes[0, 1].set_xticklabels([f'S{i}' for i in range(n_subjects)], rotation=45)
-    
-    # CV Validation Scores Distribution
-    all_cv_individual_scores = []
-    for result in all_results:
-        all_cv_individual_scores.extend(result['cv_balanced_accuracies'])
-    
-    axes[1, 0].hist(all_cv_individual_scores, bins=20, alpha=0.7, color='green')
-    axes[1, 0].set_title('Distribution of CV Fold Balanced Accuracies')
-    axes[1, 0].set_xlabel('Balanced Accuracy (%)')
-    axes[1, 0].set_ylabel('Frequency')
-    
-    # Test vs CV correlation
-    axes[1, 1].scatter(all_cv_balanced_accs, all_test_balanced_accs, alpha=0.6)
-    axes[1, 1].plot([min(all_cv_balanced_accs), max(all_cv_balanced_accs)], 
-                    [min(all_cv_balanced_accs), max(all_cv_balanced_accs)], 'r--', alpha=0.5)
-    axes[1, 1].set_title('CV vs Test Balanced Accuracy Correlation')
-    axes[1, 1].set_xlabel('CV Mean Balanced Accuracy (%)')
-    axes[1, 1].set_ylabel('Test Balanced Accuracy (%)')
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_path, f'{type_of_subject}_DCN_CV_test_metrics.png'))
-    plt.close()
-    
-    # Plot aggregated training curves (mean across subjects and folds)
-    if len(all_results) > 0:
-        num_epochs = len(all_results[0]['train_losses_mean'])
-        
-        # Calculate mean and std across subjects
-        train_bal_accs_mean = np.mean([result['train_balanced_accuracies_mean'] for result in all_results], axis=0)
-        train_bal_accs_std = np.std([result['train_balanced_accuracies_mean'] for result in all_results], axis=0)
-        val_bal_accs_mean = np.mean([result['val_balanced_accuracies_mean'] for result in all_results], axis=0)
-        val_bal_accs_std = np.std([result['val_balanced_accuracies_mean'] for result in all_results], axis=0)
-        
-        train_f1s_mean = np.mean([result['train_f1_macros_mean'] for result in all_results], axis=0)
-        train_f1s_std = np.std([result['train_f1_macros_mean'] for result in all_results], axis=0)
-        val_f1s_mean = np.mean([result['val_f1_macros_mean'] for result in all_results], axis=0)
-        val_f1s_std = np.std([result['val_f1_macros_mean'] for result in all_results], axis=0)
-        
-        train_losses_mean = np.mean([result['train_losses_mean'] for result in all_results], axis=0)
-        train_losses_std = np.std([result['train_losses_mean'] for result in all_results], axis=0)
-        val_losses_mean = np.mean([result['val_losses_mean'] for result in all_results], axis=0)
-        val_losses_std = np.std([result['val_losses_mean'] for result in all_results], axis=0)
-        
-        epochs = np.arange(1, num_epochs + 1)
-        
-        # Plot training curves
-        fig, axes = plt.subplots(3, 2, figsize=(14, 12))
-        fig.suptitle(f'{type_of_subject} DeepConvNet - Training Curves (Mean ± STD across subjects and CV folds)', fontsize=16)
-        
-        # Balanced Accuracy
-        axes[0, 0].plot(epochs, train_bal_accs_mean, 'b-', label='Train')
-        axes[0, 0].fill_between(epochs, train_bal_accs_mean - train_bal_accs_std, 
-                               train_bal_accs_mean + train_bal_accs_std, alpha=0.3, color='blue')
-        axes[0, 0].set_title('Training Balanced Accuracy')
-        axes[0, 0].set_ylabel('Balanced Accuracy (%)')
-        
-        axes[0, 1].plot(epochs, val_bal_accs_mean, 'g-', label='Validation')
-        axes[0, 1].fill_between(epochs, val_bal_accs_mean - val_bal_accs_std, 
-                               val_bal_accs_mean + val_bal_accs_std, alpha=0.3, color='green')
-        axes[0, 1].set_title('Validation Balanced Accuracy (CV)')
-        axes[0, 1].set_ylabel('Balanced Accuracy (%)')
-        
-        # F1 Macro
-        axes[1, 0].plot(epochs, train_f1s_mean, 'purple', label='Train F1')
-        axes[1, 0].fill_between(epochs, train_f1s_mean - train_f1s_std, 
-                               train_f1s_mean + train_f1s_std, alpha=0.3, color='purple')
-        axes[1, 0].set_title('Training F1 Macro')
-        axes[1, 0].set_ylabel('F1 Macro (%)')
-        
-        axes[1, 1].plot(epochs, val_f1s_mean, 'orange', label='Val F1')
-        axes[1, 1].fill_between(epochs, val_f1s_mean - val_f1s_std, 
-                               val_f1s_mean + val_f1s_std, alpha=0.3, color='orange')
-        axes[1, 1].set_title('Validation F1 Macro (CV)')
-        axes[1, 1].set_ylabel('F1 Macro (%)')
-        
-        # Loss
-        axes[2, 0].plot(epochs, train_losses_mean, 'red', label='Train Loss')
-        axes[2, 0].fill_between(epochs, train_losses_mean - train_losses_std, 
-                               train_losses_mean + train_losses_std, alpha=0.3, color='red')
-        axes[2, 0].set_title('Training Loss')
-        axes[2, 0].set_ylabel('Loss')
-        axes[2, 0].set_xlabel('Epoch')
-        
-        axes[2, 1].plot(epochs, val_losses_mean, 'brown', label='Val Loss')
-        axes[2, 1].fill_between(epochs, val_losses_mean - val_losses_std, 
-                               val_losses_mean + val_losses_std, alpha=0.3, color='brown')
-        axes[2, 1].set_title('Validation Loss (CV)')
-        axes[2, 1].set_ylabel('Loss')
-        axes[2, 1].set_xlabel('Epoch')
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_path, f'{type_of_subject}_DCN_CV_training_curves.png'))
-        plt.subplots_adjust(top=0.93)
-        plt.close()
-    
-    # Plot average confusion matrix across all subjects
-    all_conf_matrices = [result['confusion_matrix'] for result in all_results]
-    avg_conf_matrix = np.mean(all_conf_matrices, axis=0)
-    
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(avg_conf_matrix, annot=True, fmt='.1f', cmap='Blues', 
-                xticklabels=[f'Class {i}' for i in range(avg_conf_matrix.shape[1])],
-                yticklabels=[f'Class {i}' for i in range(avg_conf_matrix.shape[0])])
-    plt.title(f'Average Confusion Matrix - {type_of_subject} DeepConvNet (Test Set)')
-    plt.ylabel('True Label')
-    plt.xlabel('Predicted Label')
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_path, f'{type_of_subject}_DCN_avg_confusion_matrix.png'))
-    plt.close()
 
 
 def main():
@@ -572,31 +300,11 @@ def main():
         print(f"✅ Subject {subject_id} processed successfully.\n")
         mf.print_memory_status(f"- SUBJECT {subject_id} END")
     
-    # Final summary
-    test_bal_accs = [r['test_balanced_accuracy'] for r in all_results]
-    test_f1s = [r['test_f1_macro'] for r in all_results]
-    cv_bal_accs = [r['mean_cv_balanced_acc'] for r in all_results]
-    cv_f1s = [r['mean_cv_f1'] for r in all_results]
+    # Final summary - USING SHARED FUNCTION
+    mmf.print_final_summary(all_results, "DeepConvNet", args.n_folds)
     
-    print(f"\n🎯 Overall Results Summary:")
-    print(f"Configuration: {args.n_folds}-fold CV with 10% test split")
-    print(f"Test Results:")
-    print(f"  Mean Test Balanced Accuracy: {np.mean(test_bal_accs):.2f}% ± {np.std(test_bal_accs):.2f}%")
-    print(f"  Mean Test F1 Macro: {np.mean(test_f1s):.2f}% ± {np.std(test_f1s):.2f}%")
-    print(f"  Best Subject Test Bal Acc: {np.max(test_bal_accs):.2f}%")
-    print(f"  Worst Subject Test Bal Acc: {np.min(test_bal_accs):.2f}%")
-    print(f"\n{args.n_folds}-Fold Cross-Validation Results:")
-    print(f"  Mean CV Balanced Accuracy: {np.mean(cv_bal_accs):.2f}% ± {np.std(cv_bal_accs):.2f}%")
-    print(f"  Mean CV F1 Macro: {np.mean(cv_f1s):.2f}% ± {np.std(cv_f1s):.2f}%")
-    print(f"  Best Subject CV Bal Acc: {np.max(cv_bal_accs):.2f}%")
-    print(f"  Worst Subject CV Bal Acc: {np.min(cv_bal_accs):.2f}%")
-    
-    # Correlation between CV and Test performance
-    cv_test_corr = np.corrcoef(cv_bal_accs, test_bal_accs)[0, 1]
-    print(f"\nCV-Test Correlation: {cv_test_corr:.3f}")
-    
-    # Plot results
-    plot_results(all_results, output_path, args.type_of_subject, len(all_results))
+    # Plot results - USING SHARED FUNCTION
+    mmf.plot_all_results(all_results, output_path, args.type_of_subject, "DCN", len(all_results))
     
     print('==================== End of script! ====================')
 

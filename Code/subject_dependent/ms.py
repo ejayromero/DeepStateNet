@@ -1,124 +1,76 @@
 '''
-Script to train MicroSNet on Microstates timeseries
+Script to train MicroSNet models on Microstates timeseries
+With K-fold cross-validation, balanced accuracy, F1 scores, and single-subject loading
 '''
 import os
-import gc
 import sys
+import pickle
+import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set_theme(style="darkgrid")
-import pickle
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
-
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.metrics import balanced_accuracy_score, f1_score, confusion_matrix
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from lib import my_functions as mf
 from lib import my_models as mm
+from lib import my_models_functions as mmf 
 
-print(f'==================== Start of script {os.path.basename(__file__)}! ===================')
 
-# Explicit CUDA setup
-if torch.cuda.is_available():
-    device = torch.device("cuda:0")  # Specify GPU 0 explicitly
-    torch.cuda.set_device(0)
-    print(f"Using GPU: {torch.cuda.get_device_name(0)}")
-    print(f"CUDA Version: {torch.version.cuda}")
-    print(f"Available GPUs: {torch.cuda.device_count()}")
-else:
-    device = torch.device("cpu")
-    print("CUDA not available, using CPU")
-mf.print_memory_status("- INITIAL STARTUP")
-# ---------------------------# Load files ---------------------------
-# Get the absolute path to the project root
-# Method 1: From script location, go up to project root
-script_dir = os.path.dirname(os.path.abspath(__file__))  # Current script directory
-project_root = os.path.dirname(os.path.dirname(script_dir))  # Up 2 levels: Code -> Master-Thesis
-# Set absolute paths
-data_path = os.path.join(project_root, 'Data') + os.sep
-output_folder = os.path.join(project_root, 'Output') + os.sep
-
-type_of_subject = 'dependent'  # or 'dep' for dependent subjects
-model_name = 'attention_microsnet'  # 'microsnet' or 'multiscale_microsnet'
-output_path = f'{output_folder}ica_rest_all/{type_of_subject}/'
-input_path = f'{output_folder}ica_rest_all/'
-# Making sure all paths exist
-if not os.path.exists(input_path):
-    os.makedirs(input_path)
-if not os.path.exists(output_path):
-    os.makedirs(output_path)
-
-# Parameters 
-do_all = False
-n_subjects = 50
-num_epochs = 50
-batch_size = 32  # or 256 if memory allows
-subject_list = list(range(n_subjects))
-_, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path, output_folder=output_folder)
-mf.print_memory_status("- AFTER DATA LOADING") 
-
-if 'embedded' in model_name:
-    kmeans_path = os.path.join(input_path, 'modkmeans_results', 'modkmeans_sequence')
-    ms_timeseries_path = os.path.join(kmeans_path, 'modkmeans_sequence_indiv.pkl')
-else:
-    kmeans_path = os.path.join(input_path, 'modkmeans_results', 'ms_timeseries')
-    ms_timeseries_path = os.path.join(kmeans_path, 'ms_timeseries.pkl')
-with open(ms_timeseries_path, 'rb') as f:
-    finals_ls = pickle.load(f)
-
-mf.set_seed(42)
-
-if n_subjects == 1:
-    test_subjects = [0]
-else:
-    test_subjects = list(range(n_subjects))
+def load_subject_microstate_data(subject_id, args, data_path):
+    """Load microstate data for a single subject"""
+    # Load labels
+    _, y = mf.load_data(subject_id, data_path=data_path)
     
-output_file = os.path.join(output_path, f'{type_of_subject}_ms_{model_name}_results_ica_rest_all.npy')
-
-gc.collect()
-if torch.cuda.is_available():
-    torch.cuda.empty_cache()
-mf.print_memory_status("- AFTER GARBAGE COLLECTION")
-# ---------- Loop Through Subjects ----------
-for id in range(n_subjects):
-    mf.print_memory_status(f"- SUBJECT {id} START")  # Optional: at start of each subject
-    print(f"\n▶ Training Subject {id}")
-    if os.path.exists(output_file):
-        results = np.load(output_file, allow_pickle=True).item()
-        all_train_accuracies = results['train_accuracies']
-        all_train_losses = results['train_losses']
-        all_test_accuracies = results['test_accuracies']
-        all_val_accuracies = results['val_accuracies']
-        all_val_losses = results['val_losses']
-        all_models = results['models']
-    else:
-        all_train_accuracies = []
-        all_train_losses = []
-        all_test_accuracies = []
-        all_val_accuracies = []
-        all_val_losses = []
-        all_models = []
+    # Load microstate timeseries
+    input_path = os.path.abspath('Output/ica_rest_all')
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(f"{input_path} does not exist.")
     
-    if len(all_train_accuracies) > id:
-        print(f"Skipping Subject {id} as it has already been processed.")
-        continue
-    print(f"\n\n==================== Subject {id} ====================")
+    kmeans_path = os.path.abspath(os.path.join(input_path, 'modkmeans_results'))
 
-    # Keep original data handling - using finals_ls instead of all_data
-    x = torch.tensor(finals_ls[id], dtype=torch.float32)
+    # Determine ms_file_type based on model's input format
+    model_info = mm.MODEL_INFO.get(args.model_name, {})
+    input_format = model_info.get('input_format', 'one_hot')
+    
+    if input_format == 'categorical':
+        ms_file_type = 'modk_sequence'
+    else:  # input_format == 'one_hot'
+        ms_file_type = 'ms_timeseries'
+    
+    print(f"Model {args.model_name} uses {input_format} format, loading from {ms_file_type}")
+    
+    
+    finals_ls_folder = os.path.join(kmeans_path, ms_file_type)
+    if not os.path.exists(finals_ls_folder):
+        raise FileNotFoundError(f"{finals_ls_folder} does not exist.")
+    finals_ls = mf.load_ms(
+        subject_id=subject_id,
+        n_clusters=args.n_clusters, 
+        seq_time_path=finals_ls_folder,
+        seq_time_type=ms_file_type, 
+        seq_time_specific=args.ms_file_specific
+    )
+    
+    return finals_ls, y
 
-    # Even better approach - replace the data handling section in ms.py with:
 
+def prepare_model_input(data, model_name):
+    """Prepare input data based on model requirements"""
+    x = torch.tensor(data, dtype=torch.float32)
+    
     # Check if model uses categorical or one-hot input format
     model_info = mm.MODEL_INFO.get(model_name, {})
     input_format = model_info.get('input_format', 'one_hot')
-
+    
     if input_format == 'categorical':
         # For models that use categorical input (embedded_microsnet, attention models)
         x_microstates = x[:, 0, :].long()  # Shape: (batch_size, sequence_length)
@@ -137,7 +89,7 @@ for id in range(n_subjects):
         print(f"Using categorical microstate sequences for {model_name}")
         print(f"Microstate data shape: {x.shape}")
         print(f"Microstate range: {torch.min(x).item()} to {torch.max(x).item()}")
-
+        
     else:
         # For models that use one-hot input (microsnet, multiscale_microsnet)
         x_microstates = x[:, 0, :].long()  # Extract microstate sequences
@@ -158,213 +110,333 @@ for id in range(n_subjects):
         
         print(f"Using one-hot encoded microstate sequences for {model_name}")
         print(f"One-hot data shape: {x.shape}")
+    
+    return x, n_microstates, sequence_length
 
-    y = torch.tensor(all_y[id], dtype=torch.long)
 
-    print(f"Final data shape: {x.shape}")
-    print(f"Labels shape: {y.shape}")
+def train_subject(subject_id, args, device, data_path):
+    """Train model for a single subject with K-fold CV and 10% test split"""
+    print(f"\n▶ Training Subject {subject_id}")
+    
+    # Load single subject data for memory efficiency
+    data, y = load_subject_microstate_data(subject_id, args, data_path)
+    x, n_microstates, sequence_length = prepare_model_input(data, args.model_name)
+    y = torch.tensor(y, dtype=torch.long)
+    
+    print(f"Subject {subject_id} data shape: {x.shape}, labels shape: {y.shape}")
     print(f"Number of microstate categories: {n_microstates}")
     print(f"Number of classes: {len(torch.unique(y))}")
-
-    # ---------- Data Splitting ----------
-    x_trainval, x_test, y_trainval, y_test = train_test_split(
-        x, y, test_size=0.2, random_state=42, stratify=y)
-
-    x_train, x_val, y_train, y_val = train_test_split(
-        x_trainval, y_trainval, test_size=0.25, random_state=42, stratify=y_trainval)
-
-    # ---------- DataLoaders ----------
-    batch_size = 32
-    train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(TensorDataset(x_val, y_val), batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(TensorDataset(x_test, y_test), batch_size=batch_size, shuffle=False)
-
-    # ---------- Model ----------
-    # n_microstates = x.shape[1]  # Number of microstate categories
-    n_classes = len(torch.unique(y))
     
-    # Create model using factory function
-    if 'attention' in model_name:
-        model = mm.get_model(
-            model_name=model_name,
-            n_microstates=n_microstates,
-            n_classes=n_classes,
-            sequence_length=sequence_length,
-            dropout=0.25,
-            embedding_dim=64,           # New parameter
-            transformer_layers=4,       # New parameter  
-            transformer_heads=8         # New parameter
-        )
-    else:
-        # For other models, use the original parameters
-        model = mm.get_model(
-            model_name=model_name,
-            n_microstates=n_microstates,
-            n_classes=n_classes,
-            sequence_length=sequence_length,
-            dropout=0.25
-        )
+    # Split: 90% for CV, 10% for final test
+    x_cv, x_test, y_cv, y_test = train_test_split(
+        x, y, test_size=0.1, random_state=42, stratify=y)
     
-    model = model.to(device)
-    criterion = nn.NLLLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
-    print(f"Using model: {model_name}")
-    print(f"Model description: {mm.MODEL_INFO[model_name]['description']}")
-
-    # ---------- Training ----------
-    train_losses, val_losses = [], []
-    train_accuracies, val_accuracies = [], []
-
-    for epoch in range(num_epochs):
-        model.train()
-        train_loss = 0
-        train_correct = 0
-        train_total = 0
-        for batch_x, batch_y in train_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-            optimizer.zero_grad()
-            outputs = model(batch_x)
-            loss = criterion(outputs, batch_y)
-            loss.backward()
-            optimizer.step()
-
-            train_loss += loss.item() * batch_x.size(0)
-            preds = outputs.argmax(dim=1)
-            train_correct += (preds == batch_y).sum().item()
-            train_total += batch_y.size(0)
-
-        train_loss /= train_total
-        train_acc = train_correct / train_total * 100
-        train_losses.append(train_loss)
-        train_accuracies.append(train_acc)
-
-        # ---------- Validation ----------
-        model.eval()
-        val_loss = 0
-        val_correct = 0
-        val_total = 0
-        with torch.no_grad():
-            for batch_x, batch_y in val_loader:
-                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-                outputs = model(batch_x)
-                loss = criterion(outputs, batch_y)
-                val_loss += loss.item() * batch_x.size(0)
-                preds = outputs.argmax(dim=1)
-                val_correct += (preds == batch_y).sum().item()
-                val_total += batch_y.size(0)
-
-        val_loss /= val_total
-        val_acc = val_correct / val_total * 100
-        val_losses.append(val_loss)
-        val_accuracies.append(val_acc)
-
-        if epoch % 10 == 0 or epoch == num_epochs - 1:
-            print(f"Epoch {epoch+1:02d}/{num_epochs} | "
-                  f"Train Loss: {train_loss:.4f}, Acc: {train_acc:.2f}% | "
-                  f"Val Loss: {val_loss:.4f}, Acc: {val_acc:.2f}%")
-
-    # ---------- Test ----------
-    model.eval()
-    test_correct = 0
-    test_total = 0
-    with torch.no_grad():
-        for batch_x, batch_y in test_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-            outputs = model(batch_x)
-            preds = outputs.argmax(dim=1)
-            test_correct += (preds == batch_y).sum().item()
-            test_total += batch_y.size(0)
-
-    test_acc = test_correct / test_total * 100
-    print(f"✅ Subject {id} Test Accuracy: {test_acc:.2f}%")
-
-    # ---------- Save Results ----------
-    all_train_accuracies.append(train_accuracies)
-    all_train_losses.append(train_losses)
-    all_test_accuracies.append(test_acc)
-    all_val_accuracies.append(val_accuracies)
-    all_val_losses.append(val_losses)
-    all_models.append(model)
-
-    results = {
-        'train_accuracies': all_train_accuracies,
-        'train_losses': all_train_losses,
-        'test_accuracies': all_test_accuracies,
-        'val_accuracies': all_val_accuracies,
-        'val_losses': all_val_losses,
-        'models': all_models
-    }
-    np.save(output_file, results)
-    print(f"Results saved to {output_file}")
-    print(f"✅ Subject {id} processed successfully.\n\n")
-    gc.collect()
+    print(f"CV data: {x_cv.shape}, Test data: {x_test.shape}")
+    
+    # K-Fold Cross Validation
+    skf = StratifiedKFold(n_splits=args.n_folds, shuffle=True, random_state=42)
+    
+    # Store results for each fold
+    fold_results = []
+    cv_balanced_accs = []
+    cv_f1_scores = []
+    
+    for fold, (train_idx, val_idx) in enumerate(skf.split(x_cv, y_cv)):
+        print(f"\n--- Fold {fold + 1}/{args.n_folds} ---")
+        
+        # Get fold data
+        x_train_fold = x_cv[train_idx]
+        y_train_fold = y_cv[train_idx]
+        x_val_fold = x_cv[val_idx]
+        y_val_fold = y_cv[val_idx]
+        
+        print(f"Fold {fold + 1}: Train {x_train_fold.shape}, Val {x_val_fold.shape}")
+        
+        # DataLoaders for this fold
+        train_loader = DataLoader(TensorDataset(x_train_fold, y_train_fold), 
+                                 batch_size=args.batch_size, shuffle=True)
+        val_loader = DataLoader(TensorDataset(x_val_fold, y_val_fold), 
+                               batch_size=args.batch_size, shuffle=False)
+        
+        # Model for this fold
+        n_classes = len(torch.unique(y))
+        
+        # Create model using factory function
+        if 'attention' in args.model_name:
+            model = mm.get_model(
+                model_name=args.model_name,
+                n_microstates=n_microstates,
+                n_classes=n_classes,
+                sequence_length=sequence_length,
+                dropout=args.dropout,
+                embedding_dim=args.embedding_dim,
+                transformer_layers=args.transformer_layers,
+                transformer_heads=args.transformer_heads
+            )
+        else:
+            # For other models, use the original parameters
+            model = mm.get_model(
+                model_name=args.model_name,
+                n_microstates=n_microstates,
+                n_classes=n_classes,
+                sequence_length=sequence_length,
+                dropout=args.dropout
+            )
+        
+        model = model.to(device)
+        criterion = nn.NLLLoss()
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+        
+        print(f"Using model: {args.model_name}")
+        print(f"Model description: {mm.MODEL_INFO[args.model_name]['description']}")
+        
+        # Training for this fold
+        fold_train_losses, fold_val_losses = [], []
+        fold_train_balanced_accs, fold_val_balanced_accs = [], []
+        fold_train_f1s, fold_val_f1s = [], []
+        
+        for epoch in range(1, args.epochs + 1):
+            # Train - USING SHARED FUNCTION
+            train_loss, train_balanced_acc, train_f1 = mmf.train_epoch(
+                model, device, train_loader, optimizer, criterion, epoch, 
+                args.log_interval if epoch % 10 == 1 else 999)  # Reduce logging frequency
+            
+            # Validate - USING SHARED FUNCTION
+            val_loss, val_balanced_acc, val_f1 = mmf.validate(model, device, val_loader, criterion)
+            
+            fold_train_losses.append(train_loss)
+            fold_train_balanced_accs.append(train_balanced_acc)
+            fold_train_f1s.append(train_f1)
+            fold_val_losses.append(val_loss)
+            fold_val_balanced_accs.append(val_balanced_acc)
+            fold_val_f1s.append(val_f1)
+            
+            if epoch % 20 == 0 or epoch == args.epochs:  # Print every 20 epochs
+                print(f"Fold {fold + 1}, Epoch {epoch:02d}/{args.epochs} | "
+                      f"Train Bal Acc: {train_balanced_acc:.2f}%, F1: {train_f1:.2f}% | "
+                      f"Val Bal Acc: {val_balanced_acc:.2f}%, F1: {val_f1:.2f}%")
+        
+        # Store fold results
+        fold_result = {
+            'train_losses': fold_train_losses,
+            'train_balanced_accuracies': fold_train_balanced_accs,
+            'train_f1_macros': fold_train_f1s,
+            'val_losses': fold_val_losses,
+            'val_balanced_accuracies': fold_val_balanced_accs,
+            'val_f1_macros': fold_val_f1s,
+            'final_val_balanced_acc': val_balanced_acc,
+            'final_val_f1': val_f1,
+            'model': model
+        }
+        fold_results.append(fold_result)
+        cv_balanced_accs.append(val_balanced_acc)
+        cv_f1_scores.append(val_f1)
+        
+        print(f"✅ Fold {fold + 1} completed - Val Balanced Acc: {val_balanced_acc:.2f}%, F1: {val_f1:.2f}%")
+    
+    # Cross-validation summary - USING SHARED FUNCTION
+    mean_cv_bal_acc, std_cv_bal_acc, mean_cv_f1, std_cv_f1 = mmf.print_cv_summary(
+        cv_balanced_accs, cv_f1_scores, args.n_folds)
+    
+    # Select best fold model (highest validation balanced accuracy)
+    best_fold_idx = np.argmax(cv_balanced_accs)
+    best_model = fold_results[best_fold_idx]['model']
+    print(f"Best fold: {best_fold_idx + 1} (Val Bal Acc: {cv_balanced_accs[best_fold_idx]:.2f}%)")
+    
+    # Final test on held-out test set using best model - USING SHARED FUNCTION
+    test_loader = DataLoader(TensorDataset(x_test, y_test), 
+                            batch_size=args.batch_size, shuffle=False)
+    
+    test_balanced_acc, test_f1, conf_matrix = mmf.test(best_model, device, test_loader)
+    print(f"🎯 Final Test Results - Balanced Acc: {test_balanced_acc:.2f}%, F1: {test_f1:.2f}%")
+    
+    # Aggregate training curves across folds - USING SHARED FUNCTION
+    training_curves = mmf.aggregate_fold_training_curves(fold_results)
+    
+    # Clean up memory
+    del data, x, y, x_cv, x_test, y_cv, y_test
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    mf.print_memory_status(f"- SUBJECT {id} END")
+    
+    return {
+        'n_folds': args.n_folds,
+        'cv_balanced_accuracies': cv_balanced_accs,
+        'cv_f1_scores': cv_f1_scores,
+        'mean_cv_balanced_acc': mean_cv_bal_acc,
+        'std_cv_balanced_acc': std_cv_bal_acc,
+        'mean_cv_f1': mean_cv_f1,
+        'std_cv_f1': std_cv_f1,
+        'test_balanced_accuracy': test_balanced_acc,
+        'test_f1_macro': test_f1,
+        'confusion_matrix': conf_matrix,
+        'best_fold_idx': best_fold_idx,
+        'fold_results': fold_results,
+        'best_model': best_model,
+        **training_curves  # ← UNPACKS ALL TRAINING CURVE DATA
+    }
 
-# ---------- Summary Results ----------
-print(f"\n🎯 Overall Results:")
-print(f"Mean Test Accuracy: {np.mean(all_test_accuracies):.2f}% ± {np.std(all_test_accuracies):.2f}%")
-print(f"Best Subject Accuracy: {np.max(all_test_accuracies):.2f}%")
-print(f"Worst Subject Accuracy: {np.min(all_test_accuracies):.2f}%")
 
-# ------------------------- plotting results -------------------------
-# plot all test accuracies
-plt.figure(figsize=(10, 6))
-plt.plot(all_test_accuracies, marker='o', linestyle='-')
-plt.title(f'Subject {type_of_subject} {model_name.upper()} Test Accuracies for Each Subject')
-plt.xlabel('Subject ID')
-plt.ylabel('Test Accuracy (%)')
-plt.xticks(range(n_subjects), [f'S{i}' for i in range(n_subjects)], rotation=45)
+def main():
+    """Main training function"""
+    # Argument parsing
+    parser = argparse.ArgumentParser(description='PyTorch MicroSNet EEG Classification with K-fold CV')
+    parser.add_argument('--batch-size', type=int, default=32, metavar='N',
+                        help='input batch size for training (default: 32)')
+    parser.add_argument('--epochs', type=int, default=100, metavar='N',
+                        help='number of epochs to train (default: 100)')
+    parser.add_argument('--lr', type=float, default=1e-3, metavar='LR',
+                        help='learning rate (default: 1e-3)')
+    parser.add_argument('--no-cuda', action='store_true', default=False,
+                        help='disables CUDA training')
+    parser.add_argument('--seed', type=int, default=42, metavar='S',
+                        help='random seed (default: 42)')
+    parser.add_argument('--log-interval', type=int, default=10, metavar='N',
+                        help='how many batches to wait before logging training status')
+    parser.add_argument('--n-subjects', type=int, default=50, metavar='N',
+                        help='number of subjects to process (default: 50)')
+    parser.add_argument('--type-of-subject', type=str, default='dependent',
+                        choices=['independent', 'dependent', 'adaptive'],
+                        help='type of subject analysis (default: dependent)')
+    parser.add_argument('--n-folds', type=int, default=4, metavar='K',
+                        help='number of CV folds (default: 4)')
+    parser.add_argument('--save-model', action='store_true', default=True,
+                        help='For Saving the current Model')
+    
+    # Microstate-specific arguments
+    parser.add_argument('--model-name', type=str, default='microsnet',
+                        choices=['microsnet', 'multiscale_microsnet', 'embedded_microsnet', 'attention_microsnet'],
+                        help='model architecture to use (default: microsnet)')
+    parser.add_argument('--n-clusters', type=int, default=12, metavar='N',
+                        help='number of microstate clusters (default: 12)')
+    # parser.add_argument('--ms-file-type', type=str, default='modk_sequence',
+    #                     choices=['modk_sequence', 'ms_timeseries'],
+    #                     help='microstate file type (default: modk_sequence)')
+    parser.add_argument('--ms-file-specific', type=str, default='indiv',
+                        help='microstate file specific type (default: indiv)')
+    parser.add_argument('--dropout', type=float, default=0.25, metavar='D',
+                        help='dropout rate (default: 0.25)')
+    
+    # Attention model specific arguments
+    parser.add_argument('--embedding-dim', type=int, default=64, metavar='N',
+                        help='embedding dimension for attention models (default: 64)')
+    parser.add_argument('--transformer-layers', type=int, default=4, metavar='N',
+                        help='number of transformer layers for attention models (default: 4)')
+    parser.add_argument('--transformer-heads', type=int, default=8, metavar='N',
+                        help='number of transformer heads for attention models (default: 8)')
+    
+    args = parser.parse_args()
+    
+    print(f'==================== Start of script {os.path.basename(__file__)}! ====================')
+    
+    # Device setup
+    use_cuda = not args.no_cuda and torch.cuda.is_available()
+    device = torch.device("cuda" if use_cuda else "cpu")
+    print(f"Using device: {device}")
+    
+    if use_cuda:
+        print(f"CUDA Version: {torch.version.cuda}")
+        print(f"Available GPUs: {torch.cuda.device_count()}")
+    
+    mf.print_memory_status("- INITIAL STARTUP")
+    
+    # Set seed
+    mf.set_seed(args.seed)
+    
+    # Setup paths
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(script_dir))
+    data_path = os.path.join(project_root, 'Data') + os.sep
+    output_folder = os.path.join(project_root, 'Output') + os.sep
+    output_path = f'{output_folder}ica_rest_all/{args.type_of_subject}/{args.type_of_subject}_{args.model_name}_cv_{args.n_folds}fold_results/'
+    if not os.path.exists(output_path):
+        os.makedirs(output_path, exist_ok=True)
 
-plt.tight_layout()
-plt.savefig(os.path.join(output_path, f'{type_of_subject}_ms_{model_name}_test_accuracies.png'))
+    print(f"Using model: {args.model_name}")
+    if args.model_name in mm.MODEL_INFO:
+        print(f"Model description: {mm.MODEL_INFO[args.model_name]['description']}")
+    
+    # Training loop
+    all_results = []
+    output_file = os.path.join(output_path, f'{args.type_of_subject}_{args.model_name}_cv_{args.n_folds}fold_results.npy')
+    
+    # Check for existing results and resume if needed
+    if os.path.exists(output_file):
+        print(f"Found existing results file: {output_file}")
+        existing_results = np.load(output_file, allow_pickle=True).item()
+        n_existing = len(existing_results.get('test_balanced_accuracies', []))
+        print(f"Found {n_existing} existing subjects. Resuming from subject {n_existing}...")
+        
+        # Convert existing results to our format
+        for i in range(n_existing):
+            result = {
+                'n_folds': existing_results.get('n_folds', [args.n_folds] * n_existing)[i],
+                'cv_balanced_accuracies': existing_results['cv_balanced_accuracies'][i],
+                'cv_f1_scores': existing_results['cv_f1_scores'][i],
+                'mean_cv_balanced_acc': existing_results['mean_cv_balanced_accs'][i],
+                'std_cv_balanced_acc': existing_results['std_cv_balanced_accs'][i],
+                'mean_cv_f1': existing_results['mean_cv_f1s'][i],
+                'std_cv_f1': existing_results['std_cv_f1s'][i],
+                'test_balanced_accuracy': existing_results['test_balanced_accuracies'][i],
+                'test_f1_macro': existing_results['test_f1_macros'][i],
+                'confusion_matrix': existing_results['confusion_matrices'][i],
+                'best_fold_idx': existing_results['best_fold_indices'][i],
+                'train_losses_mean': existing_results['train_curves_mean']['train_losses_mean'][i],
+                'train_balanced_accuracies_mean': existing_results['train_curves_mean']['train_balanced_accuracies_mean'][i],
+                'train_f1_macros_mean': existing_results['train_curves_mean']['train_f1_macros_mean'][i],
+                'val_losses_mean': existing_results['train_curves_mean']['val_losses_mean'][i],
+                'val_balanced_accuracies_mean': existing_results['train_curves_mean']['val_balanced_accuracies_mean'][i],
+                'val_f1_macros_mean': existing_results['train_curves_mean']['val_f1_macros_mean'][i],
+                'best_model': existing_results['best_models'][i]
+            }
+            all_results.append(result)
+        start_subject = n_existing
+    else:
+        start_subject = 0
+    
+    for subject_id in range(start_subject, args.n_subjects):
+        mf.print_memory_status(f"- SUBJECT {subject_id} START")
+        
+        result = train_subject(subject_id, args, device, data_path)
+        all_results.append(result)
+        
+        # Save intermediate results
+        if args.save_model:
+            results_dict = {
+                'n_folds': [r['n_folds'] for r in all_results],
+                'cv_balanced_accuracies': [r['cv_balanced_accuracies'] for r in all_results],
+                'cv_f1_scores': [r['cv_f1_scores'] for r in all_results],
+                'mean_cv_balanced_accs': [r['mean_cv_balanced_acc'] for r in all_results],
+                'std_cv_balanced_accs': [r['std_cv_balanced_acc'] for r in all_results],
+                'mean_cv_f1s': [r['mean_cv_f1'] for r in all_results],
+                'std_cv_f1s': [r['std_cv_f1'] for r in all_results],
+                'test_balanced_accuracies': [r['test_balanced_accuracy'] for r in all_results],
+                'test_f1_macros': [r['test_f1_macro'] for r in all_results],
+                'confusion_matrices': [r['confusion_matrix'] for r in all_results],
+                'best_fold_indices': [r['best_fold_idx'] for r in all_results],
+                'train_curves_mean': {
+                    'train_losses_mean': [r['train_losses_mean'] for r in all_results],
+                    'train_balanced_accuracies_mean': [r['train_balanced_accuracies_mean'] for r in all_results],
+                    'train_f1_macros_mean': [r['train_f1_macros_mean'] for r in all_results],
+                    'val_losses_mean': [r['val_losses_mean'] for r in all_results],
+                    'val_balanced_accuracies_mean': [r['val_balanced_accuracies_mean'] for r in all_results],
+                    'val_f1_macros_mean': [r['val_f1_macros_mean'] for r in all_results],
+                },
+                'best_models': [r['best_model'] for r in all_results]
+            }
+            np.save(output_file, results_dict)
+            print(f"Results saved to {output_file}")
+        
+        print(f"✅ Subject {subject_id} processed successfully.\n")
+        mf.print_memory_status(f"- SUBJECT {subject_id} END")
+    
+    # Final summary - USING SHARED FUNCTION
+    mmf.print_final_summary(all_results, args.model_name, args.n_folds)
+    
+    # Plot results - USING SHARED FUNCTION
+    mmf.plot_all_results(all_results, output_path, args.type_of_subject, args.model_name, len(all_results))
+    
+    print('==================== End of script! ====================')
 
-# plot mean and std of train and val accuracies
-df = pd.DataFrame({
-    'Train Accuracy': all_train_accuracies,
-    'Val Accuracy': all_val_accuracies,
-    'Train loss': all_train_losses,
-    'Val loss': all_val_losses
-})
 
-# Compute mean and std for each metric across epochs
-metrics = ['Train Accuracy', 'Val Accuracy', 'Train loss', 'Val loss']
-mean_std_df = pd.DataFrame({'Epoch': np.arange(1, num_epochs  + 1)})
-
-for metric in metrics:
-    values = np.array(df[metric].tolist())  # shape: (n_epochs, n_subjects)
-    mean_std_df[f"{metric} Mean"] = values.mean(axis=0)
-    mean_std_df[f"{metric} Std"] = values.std(axis=0)
-
-# --- Plotting ---
-fig, axes = plt.subplots(2, 2, figsize=(14, 8), sharex=True, sharey='row')
-fig.suptitle(f'Subject {type_of_subject} {model_name.upper()} Training and Validation Metrics Over Epochs', fontsize=16)
-
-plot_params = [
-    ("Train Accuracy", axes[0, 0], "blue"),
-    ("Val Accuracy", axes[0, 1], "green"),
-    ("Train loss", axes[1, 0], "red"),
-    ("Val loss", axes[1, 1], "orange"),
-]
-
-for metric, ax, color in plot_params:
-    mean = mean_std_df[f"{metric} Mean"]
-    std = mean_std_df[f"{metric} Std"]
-    epoch = mean_std_df["Epoch"]
-
-    ax.plot(epoch, mean, label=metric, color=color)
-    ax.fill_between(epoch, mean - std, mean + std, color=color, alpha=0.3)
-    ax.set_title(f"{metric} over Epochs")
-    ax.set_xlabel("Epoch")
-    ylabel = "Accuracy (%)" if "Accuracy" in metric else "Loss"
-    ax.set_ylabel(ylabel)
-
-plt.tight_layout()
-plt.savefig(os.path.join(output_path, f'{type_of_subject}_ms_{model_name}_training_validation_metrics.png'))
-plt.legend()
-plt.subplots_adjust(top=0.9)  # Adjust top to make room for the suptitle
-plt.close()
-
-print(f'==================== End of script {os.path.basename(__file__)}! ===================')
+if __name__ == '__main__':
+    main()

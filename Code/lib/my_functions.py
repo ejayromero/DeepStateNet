@@ -199,7 +199,7 @@ def get_best_k_clusters(all_topographies, max_k=10):
         
     return best_k, all_scores
 
-def load_all_one_subject_data(subject_id, data_path='../../Data/'):
+def load_data(subject_id, data_path='../../Data/'):
     """
     Load data for a single subject.
     
