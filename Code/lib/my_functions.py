@@ -31,9 +31,9 @@ def get_file_path(data_path, folder_path, file_name):
     Returns:
         numpy.ndarray: Loaded data array.   
     """
-
-    if not os.path.exists(data_path + folder_path):
-        raise FileNotFoundError(f"Data folder {data_path + folder_path} does not exist.")
+    
+    if not os.path.exists(os.path.join(data_path, folder_path)):
+        raise FileNotFoundError(f"Data folder {os.path.join(data_path, folder_path)} does not exist.")
 
     file_path = os.path.join(data_path, folder_path, file_name)
     if not os.path.exists(file_path):
@@ -213,6 +213,7 @@ def load_all_one_subject_data(subject_id, data_path='../../Data/'):
             - labels: Labels for the subject's data.
     """
     folder_path = 'ica_rest_close/'
+    
     id_name = f'{subject_id:03d}'  # Format id as three digits
     file_name = f's{id_name}.npy'
     data_close = get_file_path(data_path, folder_path, file_name)
@@ -313,6 +314,41 @@ def load_all_data(subjects_list=None, do_all=False, data_path='../../Data/',outp
         all_y.append(data_y)
 
     return all_data, all_y
+
+def load_ms(subject_id, n_clusters, seq_time_path, seq_time_type='modk_sequence', seq_time_specific='harmonize_indiv'):
+    """
+    Load ms_time series for a specific subject.
+
+    Parameters:
+    -----------
+        subject_id : int
+            ID of the subject
+        n_clusters : int
+            Number of clusters used in ModKMeans
+        seq_time_path : str
+            Path to the sequence time directory
+        seq_time_type : str, default='modk_sequence'
+            Type of sequence time
+        seq_time_specific : str, default='harmonize_indiv'
+            Specific format sequence type
+
+    Returns:
+    --------
+        np.ndarray or None
+            Loaded ms_time series or None if not found
+    """
+
+    id_name = f'{subject_id:03d}'
+    seq_folder = os.path.join(seq_time_path, f'{seq_time_type}_c{n_clusters}_{seq_time_specific}')
+    seq_file = os.path.join(seq_folder, f'ms{id_name}.npy')
+    if os.path.exists(seq_file):
+        print(f"Loading s{id_name}\'s results from {seq_file}")
+        seq = np.load(seq_file)
+        return seq
+    else:
+        print(f"File {seq_file} does not exist")
+        return None
+
 
 def set_seed(seed=42):
     torch.manual_seed(seed)
@@ -932,3 +968,4 @@ def print_memory_status(stage=""):
         print(f"GPU Memory Reserved: {gpu_memory_reserved:.1f} MB")
     
     print(f"{'='*50}\n")
+    
