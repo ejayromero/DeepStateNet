@@ -42,7 +42,7 @@ def load_subject_microstate_data(subject_id, args, data_path):
     model_info = mm.MODEL_INFO.get(args.model_name, {})
     input_format = model_info.get('input_format', 'one_hot')
     
-    if args.use_embedding == 'categorical':
+    if args.use_embedding:
         ms_file_type = 'modk_sequence'
         input_format = 'categorical'
     else:  # input_format == 'one_hot'

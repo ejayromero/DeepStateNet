@@ -344,7 +344,7 @@ class MicroSNet(nn.Module):
     """
     MicroSNet - Microstate Sequence Network
     Simple 1D Temporal CNN for microstate sequence classification.
-    Supports both one-hot encoding and embedding-based input.
+    Supports one-hot encoding and embedding-based input (with automatic dual-channel detection).
     """
     def __init__(self, n_microstates, n_classes, sequence_length, embedding_dim=32, dropout=0.25, use_embedding=False):
         super(MicroSNet, self).__init__()
@@ -354,107 +354,245 @@ class MicroSNet(nn.Module):
         self.use_embedding = use_embedding
         self.embedding_dim = embedding_dim
         
-        # Embedding components (only used if use_embedding=True)
         if use_embedding:
+            # Embedding mode: handles both single-channel and dual-channel automatically
             self.microstate_embedding = nn.Embedding(n_microstates, embedding_dim)
-            self.positional_embedding = nn.Parameter(torch.randn(sequence_length, embedding_dim) * 0.1)
-            input_channels = embedding_dim
+            # Remove fixed positional embedding - we'll make it adaptive
+            # self.positional_embedding = nn.Parameter(torch.randn(sequence_length, embedding_dim) * 0.1)
+            
+            # Microstate branch (always present in embedding mode)
+            self.ms_conv1 = nn.Conv1d(embedding_dim, 32, kernel_size=7, padding=3)
+            self.ms_bn1 = nn.BatchNorm1d(32)
+            self.ms_dropout1 = nn.Dropout(dropout)
+            
+            self.ms_conv2 = nn.Conv1d(32, 64, kernel_size=7, padding=3)
+            self.ms_bn2 = nn.BatchNorm1d(64)
+            self.ms_dropout2 = nn.Dropout(dropout)
+            
+            self.ms_conv3 = nn.Conv1d(64, 128, kernel_size=7, padding=3)
+            self.ms_bn3 = nn.BatchNorm1d(128)
+            self.ms_dropout3 = nn.Dropout(dropout)
+            
+            self.ms_conv4 = nn.Conv1d(128, 256, kernel_size=7, padding=3)
+            self.ms_bn4 = nn.BatchNorm1d(256)
+            self.ms_dropout4 = nn.Dropout(dropout)
+            
+            self.ms_global_pool = nn.AdaptiveAvgPool1d(1)
+            
+            # GFP branch (only used if dual-channel data detected)
+            self.gfp_conv1 = nn.Conv1d(1, 16, kernel_size=7, padding=3)
+            self.gfp_bn1 = nn.BatchNorm1d(16)
+            self.gfp_dropout1 = nn.Dropout(dropout)
+            
+            self.gfp_conv2 = nn.Conv1d(16, 32, kernel_size=7, padding=3)
+            self.gfp_bn2 = nn.BatchNorm1d(32)
+            self.gfp_dropout2 = nn.Dropout(dropout)
+            
+            self.gfp_conv3 = nn.Conv1d(32, 64, kernel_size=7, padding=3)
+            self.gfp_bn3 = nn.BatchNorm1d(64)
+            self.gfp_dropout3 = nn.Dropout(dropout)
+            
+            self.gfp_conv4 = nn.Conv1d(64, 128, kernel_size=7, padding=3)
+            self.gfp_bn4 = nn.BatchNorm1d(128)
+            self.gfp_dropout4 = nn.Dropout(dropout)
+            
+            self.gfp_global_pool = nn.AdaptiveAvgPool1d(1)
+            
+            # Adaptive classifier (adjusts based on single/dual channel)
+            self.classifier_single = nn.Sequential(
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(128, 64),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(64, n_classes),
+                nn.LogSoftmax(dim=1)
+            )
+            
+            self.classifier_dual = nn.Sequential(
+                nn.Linear(256 + 128, 256),  # 256 from microstate + 128 from GFP
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(128, 64),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(64, n_classes),
+                nn.LogSoftmax(dim=1)
+            )
+            
         else:
-            input_channels = n_microstates  # For one-hot encoding
-        
-        # First temporal convolution block
-        self.conv1 = nn.Conv1d(input_channels, 32, kernel_size=7, padding=3)
-        self.bn1 = nn.BatchNorm1d(32)
-        self.dropout1 = nn.Dropout(dropout)
-        
-        # Second temporal convolution block
-        self.conv2 = nn.Conv1d(32, 64, kernel_size=7, padding=3)
-        self.bn2 = nn.BatchNorm1d(64)
-        self.dropout2 = nn.Dropout(dropout)
-        
-        # Third temporal convolution block
-        self.conv3 = nn.Conv1d(64, 128, kernel_size=7, padding=3)
-        self.bn3 = nn.BatchNorm1d(128)
-        self.dropout3 = nn.Dropout(dropout)
-        
-        # Fourth temporal convolution block
-        self.conv4 = nn.Conv1d(128, 256, kernel_size=7, padding=3)
-        self.bn4 = nn.BatchNorm1d(256)
-        self.dropout4 = nn.Dropout(dropout)
-        
-        # Global pooling and classification
-        self.global_pool = nn.AdaptiveAvgPool1d(1)
-        self.classifier = nn.Sequential(
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(64, n_classes),
-            nn.LogSoftmax(dim=1)
-        )
+            # One-hot mode: standard single-channel processing
+            input_channels = n_microstates
+            
+            self.conv1 = nn.Conv1d(input_channels, 32, kernel_size=7, padding=3)
+            self.bn1 = nn.BatchNorm1d(32)
+            self.dropout1 = nn.Dropout(dropout)
+            
+            self.conv2 = nn.Conv1d(32, 64, kernel_size=7, padding=3)
+            self.bn2 = nn.BatchNorm1d(64)
+            self.dropout2 = nn.Dropout(dropout)
+            
+            self.conv3 = nn.Conv1d(64, 128, kernel_size=7, padding=3)
+            self.bn3 = nn.BatchNorm1d(128)
+            self.dropout3 = nn.Dropout(dropout)
+            
+            self.conv4 = nn.Conv1d(128, 256, kernel_size=7, padding=3)
+            self.bn4 = nn.BatchNorm1d(256)
+            self.dropout4 = nn.Dropout(dropout)
+            
+            self.global_pool = nn.AdaptiveAvgPool1d(1)
+            self.classifier = nn.Sequential(
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(128, 64),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(64, n_classes),
+                nn.LogSoftmax(dim=1)
+            )
         
     def forward(self, x):
         """
-        Forward pass - handles both embedding and one-hot input
+        Forward pass - automatically detects and handles single/dual channel input
         Args:
             x: Input tensor 
-               - If use_embedding=True: (batch_size, sequence_length) with microstate indices
+               - If use_embedding=True: 
+                 * Single-channel: (batch_size, 1, sequence_length) with microstate indices
+                 * Dual-channel: (batch_size, 2, sequence_length) with microstate + GFP
                - If use_embedding=False: (batch_size, n_microstates, sequence_length) one-hot encoded
         Returns:
             Output tensor of shape (batch_size, n_classes)
         """
         if self.use_embedding:
-            # Handle categorical input with embeddings
-            # x shape: (batch_size, sequence_length)
-            x = self.microstate_embedding(x)  # (batch_size, sequence_length, embedding_dim)
+            # Embedding mode: automatically detect single vs dual channel
+            # Single-channel: (batch, 1, seq_len) → microstate only
+            # Dual-channel: (batch, 2, seq_len) → microstate + GFP
+            is_dual_channel = len(x.shape) == 3 and x.shape[1] == 2
             
-            # Add positional embeddings
-            x = x + self.positional_embedding.unsqueeze(0)  # Broadcasting
-            
-            # Transpose for Conv1d: (batch_size, embedding_dim, sequence_length)
-            x = x.transpose(1, 2)
+            if is_dual_channel:
+                # Dual-channel input: microstate + GFP
+                microstate_seq = x[:, 0, :].long()  # Convert to long integers for embedding
+                gfp_values = x[:, 1, :].unsqueeze(1)  # Add channel dimension: (batch, 1, seq_len)
+                
+                # Microstate branch
+                ms_x = self.microstate_embedding(microstate_seq)  # (batch, seq_len, embedding_dim)
+                # Create adaptive positional encoding based on actual sequence length
+                seq_len = ms_x.shape[1]
+                pos_emb = torch.arange(seq_len, device=ms_x.device).float().unsqueeze(0).unsqueeze(-1)
+                pos_emb = pos_emb / seq_len  # Normalize to [0, 1]
+                pos_emb = pos_emb.expand(ms_x.shape[0], seq_len, self.embedding_dim)
+                ms_x = ms_x + pos_emb * 0.1  # Add small positional signal
+                ms_x = ms_x.transpose(1, 2)  # (batch, embedding_dim, seq_len)
+                
+                ms_x = F.relu(self.ms_bn1(self.ms_conv1(ms_x)))
+                ms_x = F.max_pool1d(ms_x, kernel_size=3, stride=2, padding=1)
+                ms_x = self.ms_dropout1(ms_x)
+                
+                ms_x = F.relu(self.ms_bn2(self.ms_conv2(ms_x)))
+                ms_x = F.max_pool1d(ms_x, kernel_size=3, stride=2, padding=1)
+                ms_x = self.ms_dropout2(ms_x)
+                
+                ms_x = F.relu(self.ms_bn3(self.ms_conv3(ms_x)))
+                ms_x = F.max_pool1d(ms_x, kernel_size=3, stride=2, padding=1)
+                ms_x = self.ms_dropout3(ms_x)
+                
+                ms_x = F.relu(self.ms_bn4(self.ms_conv4(ms_x)))
+                ms_x = F.max_pool1d(ms_x, kernel_size=3, stride=2, padding=1)
+                ms_x = self.ms_dropout4(ms_x)
+                
+                ms_features = self.ms_global_pool(ms_x).squeeze(-1)  # (batch, 256)
+                
+                # GFP branch
+                gfp_x = F.relu(self.gfp_bn1(self.gfp_conv1(gfp_values)))
+                gfp_x = F.max_pool1d(gfp_x, kernel_size=3, stride=2, padding=1)
+                gfp_x = self.gfp_dropout1(gfp_x)
+                
+                gfp_x = F.relu(self.gfp_bn2(self.gfp_conv2(gfp_x)))
+                gfp_x = F.max_pool1d(gfp_x, kernel_size=3, stride=2, padding=1)
+                gfp_x = self.gfp_dropout2(gfp_x)
+                
+                gfp_x = F.relu(self.gfp_bn3(self.gfp_conv3(gfp_x)))
+                gfp_x = F.max_pool1d(gfp_x, kernel_size=3, stride=2, padding=1)
+                gfp_x = self.gfp_dropout3(gfp_x)
+                
+                gfp_x = F.relu(self.gfp_bn4(self.gfp_conv4(gfp_x)))
+                gfp_x = F.max_pool1d(gfp_x, kernel_size=3, stride=2, padding=1)
+                gfp_x = self.gfp_dropout4(gfp_x)
+                
+                gfp_features = self.gfp_global_pool(gfp_x).squeeze(-1)  # (batch, 128)
+                
+                # Combine features and classify
+                combined_features = torch.cat([ms_features, gfp_features], dim=1)  # (batch, 384)
+                x = self.classifier_dual(combined_features)
+                
+            else:
+                # Single-channel embedding: (batch, 1, seq_len) → extract microstate channel
+                microstate_seq = x[:, 0, :].long()  # Extract microstate channel and ensure integer type
+                
+                # Microstate processing
+                ms_x = self.microstate_embedding(microstate_seq)  # (batch_size, sequence_length, embedding_dim)
+                # Create adaptive positional encoding
+                seq_len = ms_x.shape[1]
+                pos_emb = torch.arange(seq_len, device=ms_x.device).float().unsqueeze(0).unsqueeze(-1)
+                pos_emb = pos_emb / seq_len  # Normalize to [0, 1]
+                pos_emb = pos_emb.expand(ms_x.shape[0], seq_len, self.embedding_dim)
+                ms_x = ms_x + pos_emb * 0.1  # Add small positional signal
+                ms_x = ms_x.transpose(1, 2)  # Transpose for Conv1d: (batch_size, embedding_dim, sequence_length)
+                
+                ms_x = F.relu(self.ms_bn1(self.ms_conv1(ms_x)))
+                ms_x = F.max_pool1d(ms_x, kernel_size=3, stride=2, padding=1)
+                ms_x = self.ms_dropout1(ms_x)
+                
+                ms_x = F.relu(self.ms_bn2(self.ms_conv2(ms_x)))
+                ms_x = F.max_pool1d(ms_x, kernel_size=3, stride=2, padding=1)
+                ms_x = self.ms_dropout2(ms_x)
+                
+                ms_x = F.relu(self.ms_bn3(self.ms_conv3(ms_x)))
+                ms_x = F.max_pool1d(ms_x, kernel_size=3, stride=2, padding=1)
+                ms_x = self.ms_dropout3(ms_x)
+                
+                ms_x = F.relu(self.ms_bn4(self.ms_conv4(ms_x)))
+                ms_x = F.max_pool1d(ms_x, kernel_size=3, stride=2, padding=1)
+                ms_x = self.ms_dropout4(ms_x)
+                
+                ms_features = self.ms_global_pool(ms_x).squeeze(-1)  # (batch, 256)
+                x = self.classifier_single(ms_features)
+                
         else:
-            # Handle one-hot input directly
-            # x already in shape: (batch_size, n_microstates, sequence_length)
-            pass
-        
-        # First conv block
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-        x = self.dropout1(x)
-        
-        # Second conv block
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-        x = self.dropout2(x)
-        
-        # Third conv block
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-        x = self.dropout3(x)
-        
-        # Fourth conv block
-        x = F.relu(self.bn4(self.conv4(x)))
-        x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-        x = self.dropout4(x)
-        
-        # Global pooling
-        x = self.global_pool(x)  # (batch_size, 256, 1)
-        x = x.squeeze(-1)  # (batch_size, 256)
-        
-        # Classification
-        x = self.classifier(x)
+            # One-hot mode: standard processing
+            x = F.relu(self.bn1(self.conv1(x)))
+            x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+            x = self.dropout1(x)
+            
+            x = F.relu(self.bn2(self.conv2(x)))
+            x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+            x = self.dropout2(x)
+            
+            x = F.relu(self.bn3(self.conv3(x)))
+            x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+            x = self.dropout3(x)
+            
+            x = F.relu(self.bn4(self.conv4(x)))
+            x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+            x = self.dropout4(x)
+            
+            x = self.global_pool(x)  # (batch_size, 256, 1)
+            x = x.squeeze(-1)  # (batch_size, 256)
+            x = self.classifier(x)
         
         return x
 
 class MultiScaleMicroSNet(nn.Module):
     """
     Multi-scale MicroSNet - Deep Multi-scale Microstate Sequence Network
-    Supports both one-hot encoding and embedding-based input.
+    Supports one-hot encoding and embedding-based input (with automatic dual-channel detection).
     Uses parallel branches with different kernel sizes to capture patterns at multiple temporal scales.
-    Covers microstate range from ~20ms to ~130ms with 4 different kernel sizes.
+    Lightweight version: 3 branches, 3 layers per branch.
     """
     def __init__(self, n_microstates, n_classes, sequence_length, embedding_dim=32, dropout=0.25, use_embedding=False):
         super(MultiScaleMicroSNet, self).__init__()
@@ -464,177 +602,328 @@ class MultiScaleMicroSNet(nn.Module):
         self.use_embedding = use_embedding
         self.embedding_dim = embedding_dim
         
-        # Embedding components (only used if use_embedding=True)
         if use_embedding:
+            # Embedding mode: handles both single-channel and dual-channel automatically
             self.microstate_embedding = nn.Embedding(n_microstates, embedding_dim)
-            self.positional_embedding = nn.Parameter(torch.randn(sequence_length, embedding_dim) * 0.1)
-            input_channels = embedding_dim
+            
+            # Microstate branches (3 different temporal scales)
+            # Branch 1: Short patterns (~20-40ms equivalent)
+            self.ms_branch1 = nn.Sequential(
+                nn.Conv1d(embedding_dim, 32, kernel_size=3, padding=1),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(32, 64, kernel_size=3, padding=1),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(64, 128, kernel_size=3, padding=1),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                
+                nn.AdaptiveAvgPool1d(1)
+            )
+            
+            # Branch 2: Medium patterns (~60-80ms equivalent)
+            self.ms_branch2 = nn.Sequential(
+                nn.Conv1d(embedding_dim, 32, kernel_size=11, padding=5),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(32, 64, kernel_size=11, padding=5),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(64, 128, kernel_size=11, padding=5),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                
+                nn.AdaptiveAvgPool1d(1)
+            )
+            
+            # Branch 3: Long patterns (~100-130ms equivalent)
+            self.ms_branch3 = nn.Sequential(
+                nn.Conv1d(embedding_dim, 32, kernel_size=25, padding=12),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(32, 64, kernel_size=25, padding=12),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(64, 128, kernel_size=25, padding=12),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                
+                nn.AdaptiveAvgPool1d(1)
+            )
+            
+            # GFP branches (3 scales, 3 layers each)
+            # Branch 1: GFP short patterns
+            self.gfp_branch1 = nn.Sequential(
+                nn.Conv1d(1, 16, kernel_size=3, padding=1),
+                nn.BatchNorm1d(16),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(16, 32, kernel_size=3, padding=1),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(32, 64, kernel_size=3, padding=1),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                
+                nn.AdaptiveAvgPool1d(1)
+            )
+            
+            # Branch 2: GFP medium patterns
+            self.gfp_branch2 = nn.Sequential(
+                nn.Conv1d(1, 16, kernel_size=11, padding=5),
+                nn.BatchNorm1d(16),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(16, 32, kernel_size=11, padding=5),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(32, 64, kernel_size=11, padding=5),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                
+                nn.AdaptiveAvgPool1d(1)
+            )
+            
+            # Branch 3: GFP long patterns
+            self.gfp_branch3 = nn.Sequential(
+                nn.Conv1d(1, 16, kernel_size=25, padding=12),
+                nn.BatchNorm1d(16),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(16, 32, kernel_size=25, padding=12),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(32, 64, kernel_size=25, padding=12),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                
+                nn.AdaptiveAvgPool1d(1)
+            )
+            
+            # Adaptive classifier (adjusts based on single/dual channel)
+            self.classifier_single = nn.Sequential(
+                nn.Linear(128 * 3, 256),  # 3 microstate branches * 128 features each
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(128, n_classes),
+                nn.LogSoftmax(dim=1)
+            )
+            
+            self.classifier_dual = nn.Sequential(
+                nn.Linear(128 * 3 + 64 * 3, 256),  # 3 MS branches (128 each) + 3 GFP branches (64 each)
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(128, n_classes),
+                nn.LogSoftmax(dim=1)
+            )
+            
         else:
-            input_channels = n_microstates  # For one-hot encoding
-        
-        # Branch 1: Very short patterns (~20-30ms equivalent)
-        self.branch1 = nn.Sequential(
-            nn.Conv1d(input_channels, 32, kernel_size=3, padding=1),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
+            # One-hot mode: standard multi-scale processing (3 branches, 3 layers)
+            input_channels = n_microstates
             
-            nn.Conv1d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
+            # Branch 1: Short patterns (~20-40ms equivalent)
+            self.branch1 = nn.Sequential(
+                nn.Conv1d(input_channels, 32, kernel_size=3, padding=1),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(32, 64, kernel_size=3, padding=1),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(64, 128, kernel_size=3, padding=1),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                
+                nn.AdaptiveAvgPool1d(1)
+            )
             
-            nn.Conv1d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
+            # Branch 2: Medium patterns (~60-80ms equivalent)
+            self.branch2 = nn.Sequential(
+                nn.Conv1d(input_channels, 32, kernel_size=11, padding=5),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(32, 64, kernel_size=11, padding=5),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(64, 128, kernel_size=11, padding=5),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                
+                nn.AdaptiveAvgPool1d(1)
+            )
             
-            nn.Conv1d(128, 256, kernel_size=3, padding=1),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
+            # Branch 3: Long patterns (~100-130ms equivalent)
+            self.branch3 = nn.Sequential(
+                nn.Conv1d(input_channels, 32, kernel_size=25, padding=12),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(32, 64, kernel_size=25, padding=12),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
+                nn.Dropout(dropout),
+                
+                nn.Conv1d(64, 128, kernel_size=25, padding=12),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                
+                nn.AdaptiveAvgPool1d(1)
+            )
             
-            nn.AdaptiveAvgPool1d(1)
-        )
-        
-        # Branch 2: Short-medium patterns (~40-60ms equivalent)
-        self.branch2 = nn.Sequential(
-            nn.Conv1d(input_channels, 32, kernel_size=7, padding=3),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(32, 64, kernel_size=7, padding=3),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(64, 128, kernel_size=7, padding=3),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(128, 256, kernel_size=7, padding=3),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            
-            nn.AdaptiveAvgPool1d(1)
-        )
-        
-        # Branch 3: Medium-long patterns (~70-100ms equivalent)
-        self.branch3 = nn.Sequential(
-            nn.Conv1d(input_channels, 32, kernel_size=15, padding=7),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(32, 64, kernel_size=15, padding=7),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(64, 128, kernel_size=15, padding=7),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(128, 256, kernel_size=15, padding=7),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            
-            nn.AdaptiveAvgPool1d(1)
-        )
-        
-        # Branch 4: Long patterns (~100-130ms equivalent)
-        self.branch4 = nn.Sequential(
-            nn.Conv1d(input_channels, 32, kernel_size=31, padding=15),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(32, 64, kernel_size=31, padding=15),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(64, 128, kernel_size=31, padding=15),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(128, 256, kernel_size=31, padding=15),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            
-            nn.AdaptiveAvgPool1d(1)
-        )
-        
-        # Classification head
-        self.classifier = nn.Sequential(
-            nn.Linear(256 * 4, 512),  # 4 branches * 256 features each
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(128, n_classes),
-            nn.LogSoftmax(dim=1)
-        )
+            # Classification head
+            self.classifier = nn.Sequential(
+                nn.Linear(128 * 3, 256),  # 3 branches * 128 features each
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(128, n_classes),
+                nn.LogSoftmax(dim=1)
+            )
         
     def forward(self, x):
         """
-        Forward pass - handles both embedding and one-hot input
+        Forward pass - automatically detects and handles single/dual channel input
         Args:
             x: Input tensor 
-               - If use_embedding=True: (batch_size, sequence_length) with microstate indices
+               - If use_embedding=True: 
+                 * Single-channel: (batch_size, 1, sequence_length) with microstate indices
+                 * Dual-channel: (batch_size, 2, sequence_length) with microstate + GFP
                - If use_embedding=False: (batch_size, n_microstates, sequence_length) one-hot encoded
         Returns:
             Output tensor of shape (batch_size, n_classes)
         """
         if self.use_embedding:
-            # Handle categorical input with embeddings
-            # x shape: (batch_size, sequence_length)
-            x = self.microstate_embedding(x)  # (batch_size, sequence_length, embedding_dim)
+            # Embedding mode: automatically detect single vs dual channel
+            is_dual_channel = len(x.shape) == 3 and x.shape[1] == 2
             
-            # Add positional embeddings
-            x = x + self.positional_embedding.unsqueeze(0)  # Broadcasting
-            
-            # Transpose for Conv1d: (batch_size, embedding_dim, sequence_length)
-            x = x.transpose(1, 2)
+            if is_dual_channel:
+                # Dual-channel input: microstate + GFP
+                microstate_seq = x[:, 0, :].long()  # Convert to long integers for embedding
+                gfp_values = x[:, 1, :].unsqueeze(1)  # Add channel dimension: (batch, 1, seq_len)
+                
+                # Process microstate with embeddings
+                ms_x = self.microstate_embedding(microstate_seq)  # (batch, seq_len, embedding_dim)
+                # Create adaptive positional encoding
+                seq_len = ms_x.shape[1]
+                pos_emb = torch.arange(seq_len, device=ms_x.device).float().unsqueeze(0).unsqueeze(-1)
+                pos_emb = pos_emb / seq_len  # Normalize to [0, 1]
+                pos_emb = pos_emb.expand(ms_x.shape[0], seq_len, self.embedding_dim)
+                ms_x = ms_x + pos_emb * 0.1  # Add positional information
+                ms_x = ms_x.transpose(1, 2)  # (batch, embedding_dim, seq_len)
+                
+                # Process microstate through 3 branches
+                ms_x1 = self.ms_branch1(ms_x).squeeze(-1)  # (batch_size, 128)
+                ms_x2 = self.ms_branch2(ms_x).squeeze(-1)  # (batch_size, 128)
+                ms_x3 = self.ms_branch3(ms_x).squeeze(-1)  # (batch_size, 128)
+                
+                # Process GFP through 3 branches
+                gfp_x1 = self.gfp_branch1(gfp_values).squeeze(-1)  # (batch_size, 64)
+                gfp_x2 = self.gfp_branch2(gfp_values).squeeze(-1)  # (batch_size, 64)
+                gfp_x3 = self.gfp_branch3(gfp_values).squeeze(-1)  # (batch_size, 64)
+                
+                # Combine all features
+                combined_features = torch.cat([ms_x1, ms_x2, ms_x3, 
+                                             gfp_x1, gfp_x2, gfp_x3], dim=1)  # (batch, 576)
+                x = self.classifier_dual(combined_features)
+                
+            else:
+                # Single-channel embedding: microstate only
+                microstate_seq = x[:, 0, :].long()  # Extract microstate channel
+                
+                # Process microstate with embeddings
+                ms_x = self.microstate_embedding(microstate_seq)  # (batch, seq_len, embedding_dim)
+                # Create adaptive positional encoding
+                seq_len = ms_x.shape[1]
+                pos_emb = torch.arange(seq_len, device=ms_x.device).float().unsqueeze(0).unsqueeze(-1)
+                pos_emb = pos_emb / seq_len  # Normalize to [0, 1]
+                pos_emb = pos_emb.expand(ms_x.shape[0], seq_len, self.embedding_dim)
+                ms_x = ms_x + pos_emb * 0.1  # Add positional information
+                ms_x = ms_x.transpose(1, 2)  # (batch, embedding_dim, seq_len)
+                
+                # Process through 3 microstate branches
+                ms_x1 = self.ms_branch1(ms_x).squeeze(-1)  # (batch_size, 128)
+                ms_x2 = self.ms_branch2(ms_x).squeeze(-1)  # (batch_size, 128)
+                ms_x3 = self.ms_branch3(ms_x).squeeze(-1)  # (batch_size, 128)
+                
+                # Combine microstate features
+                combined_features = torch.cat([ms_x1, ms_x2, ms_x3], dim=1)  # (batch, 384)
+                x = self.classifier_single(combined_features)
+                
         else:
-            # Handle one-hot input directly
-            # x already in shape: (batch_size, n_microstates, sequence_length)
-            pass
-        
-        # Process each branch
-        x1 = self.branch1(x).squeeze(-1)  # (batch_size, 256)
-        x2 = self.branch2(x).squeeze(-1)  # (batch_size, 256)
-        x3 = self.branch3(x).squeeze(-1)  # (batch_size, 256)
-        x4 = self.branch4(x).squeeze(-1)  # (batch_size, 256)
-        
-        # Concatenate features from all branches
-        x = torch.cat([x1, x2, x3, x4], dim=1)  # (batch_size, 1024)
-        
-        # Classification
-        x = self.classifier(x)
+            # One-hot mode: standard processing
+            # Process each branch
+            x1 = self.branch1(x).squeeze(-1)  # (batch_size, 128)
+            x2 = self.branch2(x).squeeze(-1)  # (batch_size, 128)
+            x3 = self.branch3(x).squeeze(-1)  # (batch_size, 128)
+            
+            # Concatenate features from all branches
+            combined_features = torch.cat([x1, x2, x3], dim=1)  # (batch_size, 384)
+            x = self.classifier(combined_features)
         
         return x
 
