@@ -176,7 +176,7 @@ class FeatureExtractor(nn.Module):
                     features = F.adaptive_avg_pool1d(features.flatten(-2, -1), 1).squeeze(-1)
             return features
 
-class MultiModalClassifier(nn.Module):
+class DeepStateNetClassifier(nn.Module):
     """Classifier that takes features from multiple modalities"""
     
     def __init__(self, raw_feature_dim, ms_feature_dim, n_classes, dropout=0.5):
