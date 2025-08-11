@@ -55,7 +55,7 @@ def create_model_combinations():
     """Create all combinations of models and settings"""
     
     # Configuration
-    clusters = [12]  # Multiple cluster sizes
+    clusters = [5,12]  # Multiple cluster sizes
     n_subjects = 50
     epochs = 100
     n_folds = 4
@@ -64,11 +64,11 @@ def create_model_combinations():
     
     # Model configurations
     model_configs = [
-        {'model': 'microsnet', 'embedding': False, 'name': 'MicroSNet'},
-        {'model': 'multiscale_microsnet', 'embedding': False, 'name': 'MultiScale MicroSNet'},
-        {'model': 'microsnet', 'embedding': True, 'name': 'MicroSNet (Embedded)'},
-        {'model': 'multiscale_microsnet', 'embedding': True, 'name': 'MultiScale MicroSNet (Embedded)'},
-        {'model': 'embedded_microsnet', 'embedding': False, 'name': 'Legacy Embedded MicroSNet'}  # Legacy model
+        {'model': 'microstatenet', 'embedding': False, 'name': 'MicroStateNet'},
+        {'model': 'multiscale_microstatenet', 'embedding': False, 'name': 'MultiScale MicroStateNet'},
+        {'model': 'microstatenet', 'embedding': True, 'name': 'MicroStateNet (Embedded)'},
+        {'model': 'multiscale_microstatenet', 'embedding': True, 'name': 'MultiScale MicroStateNet (Embedded)'},
+        # {'model': 'embedded_microstatenet', 'embedding': False, 'name': 'Legacy Embedded MicroStateNet'}  # Legacy model
     ]
     
     # Create all combinations
@@ -119,8 +119,8 @@ def main():
     print(f"Current directory: {os.getcwd()}")
     print(f"Python executable: {sys.executable}")
     
-    # Test if we can find the ms.py script
-    script_path = "Code/subject_dependent/ms.py"
+    # Test if we can find the msn.py script
+    script_path = "Code/subject_dependent/msn.py"
     if not os.path.exists(script_path):
         print(f"❌ Could not find {script_path}")
         print("Make sure you're running this from the Master-Thesis root directory")

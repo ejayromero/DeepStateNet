@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-# Your existing models (MicroSNet, MultiScaleMicroSNet, EmbeddedMicroSNet, etc.)
+# Your existing models (MicroStateNet, MultiScaleMicroStateNet, EmbeddedMicroStateNet, etc.)
 # ... [keeping all your existing model classes] ...
 
 class FeatureExtractor(nn.Module):
@@ -35,28 +35,28 @@ class FeatureExtractor(nn.Module):
         uses_embedding = getattr(self.backbone, 'use_embedding', False)
         print(f"Model uses embedding: {uses_embedding}")
         
-        if model_type == 'MicroSNet':
+        if model_type == 'MicroStateNet':
             if uses_embedding:
-                # MicroSNet with embedding
-                self.feature_extractor = self._create_embedding_microsnet_feature_extractor()
+                # MicroStateNet with embedding
+                self.feature_extractor = self._create_embedding_microstatenet_feature_extractor()
             else:
-                # Regular MicroSNet with one-hot
-                self.feature_extractor = self._create_microsnet_feature_extractor()
-        elif model_type == 'MultiScaleMicroSNet':
+                # Regular MicroStateNet with one-hot
+                self.feature_extractor = self._create_microstatenet_feature_extractor()
+        elif model_type == 'MultiScaleMicroStateNet':
             if uses_embedding:
-                # MultiScaleMicroSNet with embedding
+                # MultiScaleMicroStateNet with embedding
                 self.feature_extractor = self._create_embedding_multiscale_feature_extractor()
             else:
-                # Regular MultiScaleMicroSNet with one-hot
+                # Regular MultiScaleMicroStateNet with one-hot
                 self.feature_extractor = self._create_multiscale_feature_extractor()
-        elif model_type == 'AttentionMicroSNet':
-            # For AttentionMicroSNet
+        elif model_type == 'AttentionMicroStateNet':
+            # For AttentionMicroStateNet
             self.feature_extractor = self._create_attention_feature_extractor()
-        elif model_type == 'LightweightAttentionMicroSNet':
-            # For LightweightAttentionMicroSNet
+        elif model_type == 'LightweightAttentionMicroStateNet':
+            # For LightweightAttentionMicroStateNet
             self.feature_extractor = self._create_lightweight_attention_feature_extractor()
         # Legacy support for old separate embedding models (if they still exist)
-        elif model_type == 'EmbeddedMicroSNet':
+        elif model_type == 'EmbeddedMicroStateNet':
             self.feature_extractor = self._create_embedded_feature_extractor()
         else:
             # Fallback for any other models
@@ -67,9 +67,9 @@ class FeatureExtractor(nn.Module):
         for param in self.feature_extractor.parameters():
             param.requires_grad = False
     
-    def _create_embedding_microsnet_feature_extractor(self):
-        """Create feature extractor for MicroSNet with embedding"""
-        class EmbeddingMicroSNetFeatureExtractor(nn.Module):
+    def _create_embedding_microstatenet_feature_extractor(self):
+        """Create feature extractor for MicroStateNet with embedding"""
+        class EmbeddingMicroStateNetFeatureExtractor(nn.Module):
             def __init__(self, original_model):
                 super().__init__()
                 self.microstate_embedding = original_model.microstate_embedding
@@ -115,11 +115,11 @@ class FeatureExtractor(nn.Module):
                 x = self.global_pool(x).squeeze(-1)
                 return x
                 
-        return EmbeddingMicroSNetFeatureExtractor(self.backbone)
+        return EmbeddingMicroStateNetFeatureExtractor(self.backbone)
     
-    def _create_microsnet_feature_extractor(self):
-        """Create feature extractor for MicroSNet with one-hot input"""
-        class MicroSNetFeatureExtractor(nn.Module):
+    def _create_microstatenet_feature_extractor(self):
+        """Create feature extractor for MicroStateNet with one-hot input"""
+        class MicroStateNetFeatureExtractor(nn.Module):
             def __init__(self, original_model):
                 super().__init__()
                 self.conv1 = original_model.conv1
@@ -158,10 +158,10 @@ class FeatureExtractor(nn.Module):
                 x = self.global_pool(x).squeeze(-1)
                 return x
                 
-        return MicroSNetFeatureExtractor(self.backbone)
+        return MicroStateNetFeatureExtractor(self.backbone)
     
     def _create_embedding_multiscale_feature_extractor(self):
-        """Create feature extractor for MultiScaleMicroSNet with embedding"""
+        """Create feature extractor for MultiScaleMicroStateNet with embedding"""
         class EmbeddingMultiScaleFeatureExtractor(nn.Module):
             def __init__(self, original_model):
                 super().__init__()
@@ -191,7 +191,7 @@ class FeatureExtractor(nn.Module):
         return EmbeddingMultiScaleFeatureExtractor(self.backbone)
     
     def _create_multiscale_feature_extractor(self):
-        """Create feature extractor for MultiScaleMicroSNet with one-hot input"""
+        """Create feature extractor for MultiScaleMicroStateNet with one-hot input"""
         class MultiScaleFeatureExtractor(nn.Module):
             def __init__(self, original_model):
                 super().__init__()
@@ -215,7 +215,7 @@ class FeatureExtractor(nn.Module):
         return MultiScaleFeatureExtractor(self.backbone)
     
     def _create_embedded_feature_extractor(self):
-        """Create feature extractor for legacy EmbeddedMicroSNet (if still exists)"""
+        """Create feature extractor for legacy EmbeddedMicroStateNet (if still exists)"""
         class EmbeddedFeatureExtractor(nn.Module):
             def __init__(self, original_model):
                 super().__init__()
@@ -253,7 +253,7 @@ class FeatureExtractor(nn.Module):
         return EmbeddedFeatureExtractor(self.backbone)
     
     def _create_attention_feature_extractor(self):
-        """Create feature extractor for AttentionMicroSNet"""
+        """Create feature extractor for AttentionMicroStateNet"""
         class AttentionFeatureExtractor(nn.Module):
             def __init__(self, original_model):
                 super().__init__()
@@ -290,7 +290,7 @@ class FeatureExtractor(nn.Module):
         return AttentionFeatureExtractor(self.backbone)
     
     def _create_lightweight_attention_feature_extractor(self):
-        """Create feature extractor for LightweightAttentionMicroSNet"""
+        """Create feature extractor for LightweightAttentionMicroStateNet"""
         class LightweightAttentionFeatureExtractor(nn.Module):
             def __init__(self, original_model):
                 super().__init__()
@@ -340,14 +340,14 @@ class FeatureExtractor(nn.Module):
                     features = F.adaptive_avg_pool1d(features.flatten(-2, -1), 1).squeeze(-1)
             return features
 
-class MicroSNet(nn.Module):
+class MicroStateNet(nn.Module):
     """
-    MicroSNet - Microstate Sequence Network
+    MicroStateNet - Microstate Sequence Network
     Simple 1D Temporal CNN for microstate sequence classification.
     Supports one-hot encoding and embedding-based input (with automatic dual-channel detection).
     """
     def __init__(self, n_microstates, n_classes, sequence_length, embedding_dim=32, dropout=0.25, use_embedding=False):
-        super(MicroSNet, self).__init__()
+        super(MicroStateNet, self).__init__()
         
         self.n_microstates = n_microstates
         self.n_classes = n_classes
@@ -587,15 +587,15 @@ class MicroSNet(nn.Module):
         
         return x
 
-class MultiScaleMicroSNet(nn.Module):
+class MultiScaleMicroStateNet(nn.Module):
     """
-    Multi-scale MicroSNet - Deep Multi-scale Microstate Sequence Network
+    Multi-scale MicroStateNet - Deep Multi-scale Microstate Sequence Network
     Supports one-hot encoding and embedding-based input (with automatic dual-channel detection).
     Uses parallel branches with different kernel sizes to capture patterns at multiple temporal scales.
     Lightweight version: 3 branches, 3 layers per branch.
     """
     def __init__(self, n_microstates, n_classes, sequence_length, embedding_dim=32, dropout=0.25, use_embedding=False):
-        super(MultiScaleMicroSNet, self).__init__()
+        super(MultiScaleMicroStateNet, self).__init__()
         
         self.n_microstates = n_microstates
         self.n_classes = n_classes
@@ -927,13 +927,13 @@ class MultiScaleMicroSNet(nn.Module):
         
         return x
 
-# class EmbeddedMicroSNet(nn.Module):
+# class EmbeddedMicroStateNet(nn.Module):
 #     """
-#     EmbeddedMicroSNet - Embedding-based Microstate Sequence Network
+#     EmbeddedMicroStateNet - Embedding-based Microstate Sequence Network
 #     Uses learnable embeddings instead of one-hot encoding for microstate representation.
 #     """
 #     def __init__(self, n_microstates, n_classes, sequence_length, embedding_dim=32, dropout=0.25):
-#         super(EmbeddedMicroSNet, self).__init__()
+#         super(EmbeddedMicroStateNet, self).__init__()
         
 #         self.n_microstates = n_microstates
 #         self.n_classes = n_classes
@@ -1154,9 +1154,9 @@ class TransformerBranch(nn.Module):
         
         return output
 
-class AttentionMicroSNet(nn.Module):
+class AttentionMicroStateNet(nn.Module):
     """
-    Transformer-Enhanced Hierarchical Multiscale MicroSNet
+    Transformer-Enhanced Hierarchical Multiscale MicroStateNet
     
     Combines:
     - Learnable embeddings for microstate representations
@@ -1168,7 +1168,7 @@ class AttentionMicroSNet(nn.Module):
     """
     def __init__(self, n_microstates, n_classes, sequence_length=1000, 
                  embedding_dim=64, dropout=0.25, transformer_layers=4, transformer_heads=8):
-        super(AttentionMicroSNet, self).__init__()
+        super(AttentionMicroStateNet, self).__init__()
         
         self.n_microstates = n_microstates
         self.n_classes = n_classes
@@ -1327,12 +1327,12 @@ class AttentionMicroSNet(nn.Module):
         
         return output
 
-class LightweightAttentionMicroSNet(nn.Module):
+class LightweightAttentionMicroStateNet(nn.Module):
     """Lightweight version with fewer parameters for faster training"""
     
     def __init__(self, n_microstates, n_classes, sequence_length=1000, 
                  embedding_dim=32, dropout=0.25):
-        super(LightweightAttentionMicroSNet, self).__init__()
+        super(LightweightAttentionMicroStateNet, self).__init__()
 
         self.microstate_embedding = nn.Embedding(n_microstates, embedding_dim)
         self.positional_encoding = PositionalEncoding(embedding_dim, sequence_length, dropout)
@@ -1408,22 +1408,22 @@ def get_model(model_name, n_microstates, n_classes, sequence_length, **kwargs):
     """
     model_name = model_name.lower()
     
-    if model_name == 'microsnet':
-        return MicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name == 'multiscale_microsnet':
-        return MultiScaleMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name == 'embedded_microsnet':
+    if model_name == 'microstatenet':
+        return MicroStateNet(n_microstates, n_classes, sequence_length, **kwargs)
+    elif model_name == 'multiscale_microstatenet':
+        return MultiScaleMicroStateNet(n_microstates, n_classes, sequence_length, **kwargs)
+    elif model_name == 'embedded_microstatenet':
         # For backward compatibility - force use_embedding=True
         kwargs['use_embedding'] = True
-        return MicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name == 'embedded_multiscale_microsnet':
+        return MicroStateNet(n_microstates, n_classes, sequence_length, **kwargs)
+    elif model_name == 'embedded_multiscale_microstatenet':
         # For embedded multiscale - force use_embedding=True
         kwargs['use_embedding'] = True
-        return MultiScaleMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name == 'attention_microsnet':
-        return AttentionMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name == 'lightweight_attention_microsnet':
-        return LightweightAttentionMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
+        return MultiScaleMicroStateNet(n_microstates, n_classes, sequence_length, **kwargs)
+    elif model_name == 'attention_microstatenet':
+        return AttentionMicroStateNet(n_microstates, n_classes, sequence_length, **kwargs)
+    elif model_name == 'lightweight_attention_microstatenet':
+        return LightweightAttentionMicroStateNet(n_microstates, n_classes, sequence_length, **kwargs)
     else:
         available_models = list(MODEL_INFO.keys())
         raise ValueError(f"Unknown model name: {model_name}. "
@@ -1432,7 +1432,7 @@ def get_model(model_name, n_microstates, n_classes, sequence_length, **kwargs):
 
 # Updated model information dictionary
 MODEL_INFO = {
-    'microsnet': {
+    'microstatenet': {
         'description': 'Deep temporal CNN for microstate sequences - supports both one-hot and embedding input',
         'input_format': 'one_hot',  # Default format
         'input_shape': '(batch_size, n_microstates, sequence_length)',
@@ -1442,7 +1442,7 @@ MODEL_INFO = {
         'supports_embedding': True,
         'embedding_input_shape': '(batch_size, sequence_length)'
     },
-    'multiscale_microsnet': {
+    'multiscale_microstatenet': {
         'description': 'Deep multi-scale temporal CNN with parallel branches - supports both one-hot and embedding input',
         'input_format': 'one_hot',  # Default format
         'input_shape': '(batch_size, n_microstates, sequence_length)',
@@ -1452,8 +1452,8 @@ MODEL_INFO = {
         'supports_embedding': True,
         'embedding_input_shape': '(batch_size, sequence_length)'
     },
-    'embedded_microsnet': {
-        'description': 'Deep temporal CNN with learnable microstate embeddings (legacy - use microsnet with use_embedding=True)',
+    'embedded_microstatenet': {
+        'description': 'Deep temporal CNN with learnable microstate embeddings (legacy - use microstatenet with use_embedding=True)',
         'input_format': 'categorical',
         'input_shape': '(batch_size, sequence_length)',
         'features': 'Single-scale temporal CNN with embedding layer',
@@ -1461,9 +1461,9 @@ MODEL_INFO = {
         'complexity': 'Low',
         'supports_embedding': True,
         'is_legacy': True,
-        'recommended_alternative': 'microsnet with use_embedding=True'
+        'recommended_alternative': 'microstatenet with use_embedding=True'
     },
-    'embedded_multiscale_microsnet': {
+    'embedded_multiscale_microstatenet': {
         'description': 'Deep multi-scale temporal CNN with learnable microstate embeddings',
         'input_format': 'categorical',
         'input_shape': '(batch_size, sequence_length)',
@@ -1471,9 +1471,9 @@ MODEL_INFO = {
         'temporal_scales': ['k3_20-30ms', 'k7_40-60ms', 'k15_70-100ms', 'k31_100-130ms'],
         'complexity': 'Medium-High',
         'supports_embedding': True,
-        'recommended_alternative': 'multiscale_microsnet with use_embedding=True'
+        'recommended_alternative': 'multiscale_microstatenet with use_embedding=True'
     },
-    'attention_microsnet': {
+    'attention_microstatenet': {
         'description': 'Transformer-enhanced hierarchical multiscale CNN with attention mechanisms',
         'input_format': 'categorical',
         'input_shape': '(batch_size, sequence_length)',
@@ -1482,7 +1482,7 @@ MODEL_INFO = {
         'complexity': 'High',
         'supports_embedding': True
     },
-    'lightweight_attention_microsnet': {
+    'lightweight_attention_microstatenet': {
         'description': 'Simplified CNN + transformer for faster training',
         'input_format': 'categorical',
         'input_shape': '(batch_size, sequence_length)',

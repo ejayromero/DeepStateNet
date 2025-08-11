@@ -1,5 +1,5 @@
 '''
-Script to train MicroSNet models on Microstates timeseries
+Script to train MicroStateNet models on Microstates timeseries
 With K-fold cross-validation, balanced accuracy, F1 scores, and single-subject loading
 Supports both one-hot encoding and embedding-based input
 '''
@@ -272,7 +272,7 @@ def train_subject(subject_id, args, device, data_path):
 def main():
     """Main training function"""
     # Argument parsing
-    parser = argparse.ArgumentParser(description='PyTorch MicroSNet EEG Classification with K-fold CV')
+    parser = argparse.ArgumentParser(description='PyTorch MicroStateNet EEG Classification with K-fold CV')
     parser.add_argument('--batch-size', type=int, default=32, metavar='N',
                         help='input batch size for training (default: 32)')
     parser.add_argument('--epochs', type=int, default=100, metavar='N',
@@ -296,9 +296,9 @@ def main():
                         help='For Saving the current Model')
     
     # Microstate-specific arguments
-    parser.add_argument('--model-name', type=str, default='microsnet',
-                        choices=['microsnet', 'multiscale_microsnet', 'embedded_microsnet', 'attention_microsnet'],
-                        help='model architecture to use (default: microsnet)')
+    parser.add_argument('--model-name', type=str, default='microstatenet',
+                        choices=['microstatenet', 'multiscale_microstatenet', 'embedded_microstatenet', 'attention_microstatenet'],
+                        help='model architecture to use (default: microstatenet)')
     parser.add_argument('--n-clusters', type=int, default=12, metavar='N',
                         help='number of microstate clusters (default: 12)')
     parser.add_argument('--ms-file-specific', type=str, default='indiv',
@@ -347,7 +347,7 @@ def main():
     model_name_with_embedding = f"{args.model_name}{embedding_suffix}"
     
     # Setup paths with embedding suffix
-    output_path = f'{output_folder}ica_rest_all/{args.type_of_subject}/{args.type_of_subject}_{model_name_with_embedding}_c{args.n_clusters}_cv_{args.n_folds}fold_results/'
+    output_path = f'{output_folder}ica_rest_all/{args.type_of_subject}/{args.type_of_subject}_{model_name_with_embedding}_c{args.n_clusters}_{args.n_folds}fold_results/'
     if not os.path.exists(output_path):
         os.makedirs(output_path, exist_ok=True)
 
