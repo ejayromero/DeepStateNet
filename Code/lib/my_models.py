@@ -1006,6 +1006,54 @@ class MultiScaleMicroStateNet(nn.Module):
         
 #         return x
 
+class DeepStateNetClassifier(nn.Module):
+    """
+    Multimodal classifier that fuses features from raw EEG and microstate models
+    Used in DeepStateNet for combining DCN and MicroSNet features
+    """
+    
+    def __init__(self, raw_feature_dim, ms_feature_dim, n_classes, dropout=0.5):
+        super(DeepStateNetClassifier, self).__init__()
+        
+        self.raw_feature_dim = raw_feature_dim
+        self.ms_feature_dim = ms_feature_dim
+        self.n_classes = n_classes
+        
+        # Feature fusion layer
+        total_features = raw_feature_dim + ms_feature_dim
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(total_features, 512),
+            nn.ReLU(),
+            nn.BatchNorm1d(512),
+            nn.Dropout(dropout),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.BatchNorm1d(256),
+            nn.Dropout(dropout),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout/2),  # Reduce dropout for final layer
+            nn.Linear(128, n_classes),
+            nn.LogSoftmax(dim=1)  # For NLLLoss compatibility
+        )
+        
+    def forward(self, raw_features, ms_features):
+        """
+        Forward pass combining features from both modalities
+        
+        Args:
+            raw_features: Features from raw EEG model (batch_size, raw_feature_dim)
+            ms_features: Features from microstate model (batch_size, ms_feature_dim)
+            
+        Returns:
+            Classification logits (batch_size, n_classes)
+        """
+        # Concatenate features from both modalities
+        combined_features = torch.cat([raw_features, ms_features], dim=1)
+        return self.classifier(combined_features)
+
+
 # ============== TRANSFORMER-ENHANCED MODELS ==============
 
 class PositionalEncoding(nn.Module):
@@ -1408,21 +1456,21 @@ def get_model(model_name, n_microstates, n_classes, sequence_length, **kwargs):
     """
     model_name = model_name.lower()
     
-    if model_name == 'microstatenet':
+    if model_name == 'msn':
         return MicroStateNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name == 'multiscale_microstatenet':
+    elif model_name == 'multiscale_msn':
         return MultiScaleMicroStateNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name == 'embedded_microstatenet':
+    elif model_name == 'embedded_msn':
         # For backward compatibility - force use_embedding=True
         kwargs['use_embedding'] = True
         return MicroStateNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name == 'embedded_multiscale_microstatenet':
+    elif model_name == 'embedded_multiscale_msn':
         # For embedded multiscale - force use_embedding=True
         kwargs['use_embedding'] = True
         return MultiScaleMicroStateNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name == 'attention_microstatenet':
+    elif model_name == 'attention_msn':
         return AttentionMicroStateNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name == 'lightweight_attention_microstatenet':
+    elif model_name == 'lightweight_attention_msn':
         return LightweightAttentionMicroStateNet(n_microstates, n_classes, sequence_length, **kwargs)
     else:
         available_models = list(MODEL_INFO.keys())
@@ -1432,7 +1480,7 @@ def get_model(model_name, n_microstates, n_classes, sequence_length, **kwargs):
 
 # Updated model information dictionary
 MODEL_INFO = {
-    'microstatenet': {
+    'msn': {
         'description': 'Deep temporal CNN for microstate sequences - supports both one-hot and embedding input',
         'input_format': 'one_hot',  # Default format
         'input_shape': '(batch_size, n_microstates, sequence_length)',
@@ -1442,7 +1490,7 @@ MODEL_INFO = {
         'supports_embedding': True,
         'embedding_input_shape': '(batch_size, sequence_length)'
     },
-    'multiscale_microstatenet': {
+    'multiscale_msn': {
         'description': 'Deep multi-scale temporal CNN with parallel branches - supports both one-hot and embedding input',
         'input_format': 'one_hot',  # Default format
         'input_shape': '(batch_size, n_microstates, sequence_length)',
@@ -1452,7 +1500,7 @@ MODEL_INFO = {
         'supports_embedding': True,
         'embedding_input_shape': '(batch_size, sequence_length)'
     },
-    'embedded_microstatenet': {
+    'embedded_msn': {
         'description': 'Deep temporal CNN with learnable microstate embeddings (legacy - use microstatenet with use_embedding=True)',
         'input_format': 'categorical',
         'input_shape': '(batch_size, sequence_length)',
@@ -1463,7 +1511,7 @@ MODEL_INFO = {
         'is_legacy': True,
         'recommended_alternative': 'microstatenet with use_embedding=True'
     },
-    'embedded_multiscale_microstatenet': {
+    'embedded_multiscale_msn': {
         'description': 'Deep multi-scale temporal CNN with learnable microstate embeddings',
         'input_format': 'categorical',
         'input_shape': '(batch_size, sequence_length)',
@@ -1473,7 +1521,7 @@ MODEL_INFO = {
         'supports_embedding': True,
         'recommended_alternative': 'multiscale_microstatenet with use_embedding=True'
     },
-    'attention_microstatenet': {
+    'attention_msn': {
         'description': 'Transformer-enhanced hierarchical multiscale CNN with attention mechanisms',
         'input_format': 'categorical',
         'input_shape': '(batch_size, sequence_length)',
@@ -1482,7 +1530,7 @@ MODEL_INFO = {
         'complexity': 'High',
         'supports_embedding': True
     },
-    'lightweight_attention_microstatenet': {
+    'lightweight_attention_msn': {
         'description': 'Simplified CNN + transformer for faster training',
         'input_format': 'categorical',
         'input_shape': '(batch_size, sequence_length)',

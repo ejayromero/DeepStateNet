@@ -222,13 +222,13 @@ def main():
     project_root = os.path.dirname(os.path.dirname(script_dir))
     data_path = os.path.join(project_root, 'Data') + os.sep
     output_folder = os.path.join(project_root, 'Output') + os.sep
-    output_path = f'{output_folder}ica_rest_all/{args.type_of_subject}/{args.type_of_subject}_dcn_cv_{args.n_folds}fold_results/'
+    output_path = f'{output_folder}ica_rest_all/{args.type_of_subject}/{args.type_of_subject}_dcn_{args.n_folds}fold_results/'
     if not os.path.exists(output_path):
         os.makedirs(output_path, exist_ok=True)
 
     # Training loop
     all_results = []
-    output_file = os.path.join(output_path, f'{args.type_of_subject}_dcn_cv_{args.n_folds}fold_results.npy')
+    output_file = os.path.join(output_path, f'{args.type_of_subject}_dcn_{args.n_folds}fold_results.npy')
     
     # Check for existing results and resume if needed
     if os.path.exists(output_file):
