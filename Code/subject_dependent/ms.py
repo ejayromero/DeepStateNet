@@ -1,6 +1,7 @@
 '''
 Script to train MicroSNet models on Microstates timeseries
 With K-fold cross-validation, balanced accuracy, F1 scores, and single-subject loading
+Supports both one-hot encoding and embedding-based input
 '''
 import os
 import sys
@@ -41,8 +42,9 @@ def load_subject_microstate_data(subject_id, args, data_path):
     model_info = mm.MODEL_INFO.get(args.model_name, {})
     input_format = model_info.get('input_format', 'one_hot')
     
-    if input_format == 'categorical':
+    if args.use_embedding == 'categorical':
         ms_file_type = 'modk_sequence'
+        input_format = 'categorical'
     else:  # input_format == 'one_hot'
         ms_file_type = 'ms_timeseries'
     
@@ -63,52 +65,41 @@ def load_subject_microstate_data(subject_id, args, data_path):
     return finals_ls, y
 
 
-def prepare_model_input(data, model_name):
-    """Prepare input data based on model requirements"""
+def prepare_model_input(data, model_name, use_embedding=False):
+    """Prepare input data based on model requirements and embedding flag"""
     x = torch.tensor(data, dtype=torch.float32)
     
-    # Check if model uses categorical or one-hot input format
-    model_info = mm.MODEL_INFO.get(model_name, {})
-    input_format = model_info.get('input_format', 'one_hot')
+    # Determine input format based on embedding flag or model default
+    if use_embedding:
+        input_format = 'categorical'
+    else:
+        model_info = mm.MODEL_INFO.get(model_name, {})
+        input_format = model_info.get('input_format', 'one_hot')
+    
+    print(f"Input data shape: {x.shape}")
+    print(f"Model {model_name} with use_embedding={use_embedding} expects {input_format} format")
     
     if input_format == 'categorical':
-        # For models that use categorical input (embedded_microsnet, attention models)
-        x_microstates = x[:, 0, :].long()  # Shape: (batch_size, sequence_length)
-        
-        # Handle negative indices (embedding layers require indices >= 0)
-        min_val = torch.min(x_microstates).item()
+        # Data loaded is already categorical sequences
+        # Handle potential negative indices
+        min_val = torch.min(x).item()
         if min_val < 0:
             print(f"Found negative microstate indices ({min_val}), shifting to start from 0...")
-            x_microstates = x_microstates - min_val  # Shift so minimum becomes 0
-            print(f"New microstate range: {torch.min(x_microstates).item()} to {torch.max(x_microstates).item()}")
+            x = x - min_val
         
-        x = x_microstates
         n_microstates = int(torch.max(x).item()) + 1
-        sequence_length = x.shape[1]  # For categorical data: (batch_size, sequence_length)
+        sequence_length = x.shape[1]
         
-        print(f"Using categorical microstate sequences for {model_name}")
+        print(f"Using categorical microstate sequences")
         print(f"Microstate data shape: {x.shape}")
         print(f"Microstate range: {torch.min(x).item()} to {torch.max(x).item()}")
         
-    else:
-        # For models that use one-hot input (microsnet, multiscale_microsnet)
-        x_microstates = x[:, 0, :].long()  # Extract microstate sequences
+    else:  # input_format == 'one_hot'
+        # Data loaded is already one-hot encoded
+        n_microstates = x.shape[1]
+        sequence_length = x.shape[2]
         
-        # Handle negative indices
-        min_val = torch.min(x_microstates).item()
-        if min_val < 0:
-            print(f"Found negative microstate indices ({min_val}), shifting to start from 0...")
-            x_microstates = x_microstates - min_val
-        
-        n_microstates = int(torch.max(x_microstates).item()) + 1
-        sequence_length = x_microstates.shape[1]
-        
-        # Convert to one-hot encoding
-        x_onehot = torch.zeros(x_microstates.shape[0], n_microstates, sequence_length)
-        x_onehot.scatter_(1, x_microstates.unsqueeze(1), 1)
-        x = x_onehot
-        
-        print(f"Using one-hot encoded microstate sequences for {model_name}")
+        print(f"Using one-hot encoded microstate sequences")
         print(f"One-hot data shape: {x.shape}")
     
     return x, n_microstates, sequence_length
@@ -120,7 +111,7 @@ def train_subject(subject_id, args, device, data_path):
     
     # Load single subject data for memory efficiency
     data, y = load_subject_microstate_data(subject_id, args, data_path)
-    x, n_microstates, sequence_length = prepare_model_input(data, args.model_name)
+    x, n_microstates, sequence_length = prepare_model_input(data, args.model_name, args.use_embedding)
     y = torch.tensor(y, dtype=torch.long)
     
     print(f"Subject {subject_id} data shape: {x.shape}, labels shape: {y.shape}")
@@ -171,7 +162,8 @@ def train_subject(subject_id, args, device, data_path):
                 dropout=args.dropout,
                 embedding_dim=args.embedding_dim,
                 transformer_layers=args.transformer_layers,
-                transformer_heads=args.transformer_heads
+                transformer_heads=args.transformer_heads,
+                use_embedding=args.use_embedding
             )
         else:
             # For other models, use the original parameters
@@ -180,14 +172,15 @@ def train_subject(subject_id, args, device, data_path):
                 n_microstates=n_microstates,
                 n_classes=n_classes,
                 sequence_length=sequence_length,
-                dropout=args.dropout
+                dropout=args.dropout,
+                use_embedding=args.use_embedding
             )
         
         model = model.to(device)
         criterion = nn.NLLLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
         
-        print(f"Using model: {args.model_name}")
+        print(f"Using model: {args.model_name} with embedding: {args.use_embedding}")
         print(f"Model description: {mm.MODEL_INFO[args.model_name]['description']}")
         
         # Training for this fold
@@ -308,17 +301,18 @@ def main():
                         help='model architecture to use (default: microsnet)')
     parser.add_argument('--n-clusters', type=int, default=12, metavar='N',
                         help='number of microstate clusters (default: 12)')
-    # parser.add_argument('--ms-file-type', type=str, default='modk_sequence',
-    #                     choices=['modk_sequence', 'ms_timeseries'],
-    #                     help='microstate file type (default: modk_sequence)')
     parser.add_argument('--ms-file-specific', type=str, default='indiv',
                         help='microstate file specific type (default: indiv)')
     parser.add_argument('--dropout', type=float, default=0.25, metavar='D',
                         help='dropout rate (default: 0.25)')
     
+    # Embedding support
+    parser.add_argument('--use-embedding', action='store_true', default=False,
+                        help='Use embedding-based input instead of one-hot encoding (default: False)')
+    
     # Attention model specific arguments
     parser.add_argument('--embedding-dim', type=int, default=64, metavar='N',
-                        help='embedding dimension for attention models (default: 64)')
+                        help='embedding dimension for embedding models (default: 64)')
     parser.add_argument('--transformer-layers', type=int, default=4, metavar='N',
                         help='number of transformer layers for attention models (default: 4)')
     parser.add_argument('--transformer-heads', type=int, default=8, metavar='N',
@@ -347,17 +341,23 @@ def main():
     project_root = os.path.dirname(os.path.dirname(script_dir))
     data_path = os.path.join(project_root, 'Data') + os.sep
     output_folder = os.path.join(project_root, 'Output') + os.sep
-    output_path = f'{output_folder}ica_rest_all/{args.type_of_subject}/{args.type_of_subject}_{args.model_name}_c{args.n_clusters}_cv_{args.n_folds}fold_results/'
+    
+    # Create embedding suffix for output naming
+    embedding_suffix = "_embedded" if args.use_embedding else ""
+    model_name_with_embedding = f"{args.model_name}{embedding_suffix}"
+    
+    # Setup paths with embedding suffix
+    output_path = f'{output_folder}ica_rest_all/{args.type_of_subject}/{args.type_of_subject}_{model_name_with_embedding}_c{args.n_clusters}_cv_{args.n_folds}fold_results/'
     if not os.path.exists(output_path):
         os.makedirs(output_path, exist_ok=True)
 
-    print(f"Using model: {args.model_name}")
+    print(f"Using model: {args.model_name} with embedding: {args.use_embedding}")
     if args.model_name in mm.MODEL_INFO:
         print(f"Model description: {mm.MODEL_INFO[args.model_name]['description']}")
     
     # Training loop
     all_results = []
-    output_file = os.path.join(output_path, f'{args.type_of_subject}_{args.model_name}_c{args.n_clusters}_cv_{args.n_folds}fold_results.npy')
+    output_file = os.path.join(output_path, f'{args.type_of_subject}_{model_name_with_embedding}_c{args.n_clusters}_{args.n_folds}fold_results.npy')
     
     # Check for existing results and resume if needed
     if os.path.exists(output_file):
@@ -430,10 +430,10 @@ def main():
         mf.print_memory_status(f"- SUBJECT {subject_id} END")
     
     # Final summary - USING SHARED FUNCTION
-    mmf.print_final_summary(all_results, args.model_name, args.n_folds)
+    mmf.print_final_summary(all_results, model_name_with_embedding, args.n_folds)
     
-    # Plot results - USING SHARED FUNCTION
-    mmf.plot_all_results(all_results, output_path, args.type_of_subject, args.model_name, len(all_results))
+    # Plot results - USING SHARED FUNCTION with embedding suffix
+    mmf.plot_all_results(all_results, output_path, args.type_of_subject, model_name_with_embedding, len(all_results))
     
     print('==================== End of script! ====================')
 

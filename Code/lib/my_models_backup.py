@@ -31,191 +31,25 @@ class FeatureExtractor(nn.Module):
         model_type = type(self.backbone).__name__
         print(f"Creating FeatureExtractor for model type: {model_type}")
         
-        # Check if model uses embedding (unified models)
-        uses_embedding = getattr(self.backbone, 'use_embedding', False)
-        print(f"Model uses embedding: {uses_embedding}")
-        
-        if model_type == 'MicroSNet':
-            if uses_embedding:
-                # MicroSNet with embedding
-                self.feature_extractor = self._create_embedding_microsnet_feature_extractor()
-            else:
-                # Regular MicroSNet with one-hot
-                self.feature_extractor = self._create_microsnet_feature_extractor()
-        elif model_type == 'MultiScaleMicroSNet':
-            if uses_embedding:
-                # MultiScaleMicroSNet with embedding
-                self.feature_extractor = self._create_embedding_multiscale_feature_extractor()
-            else:
-                # Regular MultiScaleMicroSNet with one-hot
-                self.feature_extractor = self._create_multiscale_feature_extractor()
+        if model_type == 'EmbeddedMicroSNet':
+            # For EmbeddedMicroSNet, extract features before the classifier
+            self.feature_extractor = self._create_embedded_feature_extractor()
         elif model_type == 'AttentionMicroSNet':
-            # For AttentionMicroSNet
+            # For AttentionMicroSNet, extract features before the classifier
             self.feature_extractor = self._create_attention_feature_extractor()
         elif model_type == 'LightweightAttentionMicroSNet':
             # For LightweightAttentionMicroSNet
             self.feature_extractor = self._create_lightweight_attention_feature_extractor()
-        # Legacy support for old separate embedding models (if they still exist)
-        elif model_type == 'EmbeddedMicroSNet':
-            self.feature_extractor = self._create_embedded_feature_extractor()
         else:
-            # Fallback for any other models
-            print(f"Using generic feature extractor for unknown model type: {model_type}")
+            # For other models (MicroSNet, MultiScaleMicroSNet, etc.)
             self.feature_extractor = self._create_generic_feature_extractor()
             
         # Freeze the feature extractor
         for param in self.feature_extractor.parameters():
             param.requires_grad = False
-    
-    def _create_embedding_microsnet_feature_extractor(self):
-        """Create feature extractor for MicroSNet with embedding"""
-        class EmbeddingMicroSNetFeatureExtractor(nn.Module):
-            def __init__(self, original_model):
-                super().__init__()
-                self.microstate_embedding = original_model.microstate_embedding
-                self.positional_embedding = original_model.positional_embedding
-                self.conv1 = original_model.conv1
-                self.bn1 = original_model.bn1
-                self.dropout1 = original_model.dropout1
-                self.conv2 = original_model.conv2
-                self.bn2 = original_model.bn2
-                self.dropout2 = original_model.dropout2
-                self.conv3 = original_model.conv3
-                self.bn3 = original_model.bn3
-                self.dropout3 = original_model.dropout3
-                self.conv4 = original_model.conv4
-                self.bn4 = original_model.bn4
-                self.dropout4 = original_model.dropout4
-                self.global_pool = original_model.global_pool
-                
-            def forward(self, x):
-                # Embedding path
-                x = self.microstate_embedding(x)
-                x = x + self.positional_embedding.unsqueeze(0)
-                x = x.transpose(1, 2)
-                
-                # Conv layers
-                x = F.relu(self.bn1(self.conv1(x)))
-                x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-                x = self.dropout1(x)
-                
-                x = F.relu(self.bn2(self.conv2(x)))
-                x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-                x = self.dropout2(x)
-                
-                x = F.relu(self.bn3(self.conv3(x)))
-                x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-                x = self.dropout3(x)
-                
-                x = F.relu(self.bn4(self.conv4(x)))
-                x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-                x = self.dropout4(x)
-                
-                # Global pooling to get features
-                x = self.global_pool(x).squeeze(-1)
-                return x
-                
-        return EmbeddingMicroSNetFeatureExtractor(self.backbone)
-    
-    def _create_microsnet_feature_extractor(self):
-        """Create feature extractor for MicroSNet with one-hot input"""
-        class MicroSNetFeatureExtractor(nn.Module):
-            def __init__(self, original_model):
-                super().__init__()
-                self.conv1 = original_model.conv1
-                self.bn1 = original_model.bn1
-                self.dropout1 = original_model.dropout1
-                self.conv2 = original_model.conv2
-                self.bn2 = original_model.bn2
-                self.dropout2 = original_model.dropout2
-                self.conv3 = original_model.conv3
-                self.bn3 = original_model.bn3
-                self.dropout3 = original_model.dropout3
-                self.conv4 = original_model.conv4
-                self.bn4 = original_model.bn4
-                self.dropout4 = original_model.dropout4
-                self.global_pool = original_model.global_pool
-                
-            def forward(self, x):
-                # One-hot input path (no embedding)
-                x = F.relu(self.bn1(self.conv1(x)))
-                x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-                x = self.dropout1(x)
-                
-                x = F.relu(self.bn2(self.conv2(x)))
-                x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-                x = self.dropout2(x)
-                
-                x = F.relu(self.bn3(self.conv3(x)))
-                x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-                x = self.dropout3(x)
-                
-                x = F.relu(self.bn4(self.conv4(x)))
-                x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-                x = self.dropout4(x)
-                
-                # Global pooling to get features
-                x = self.global_pool(x).squeeze(-1)
-                return x
-                
-        return MicroSNetFeatureExtractor(self.backbone)
-    
-    def _create_embedding_multiscale_feature_extractor(self):
-        """Create feature extractor for MultiScaleMicroSNet with embedding"""
-        class EmbeddingMultiScaleFeatureExtractor(nn.Module):
-            def __init__(self, original_model):
-                super().__init__()
-                self.microstate_embedding = original_model.microstate_embedding
-                self.positional_embedding = original_model.positional_embedding
-                self.branch1 = original_model.branch1
-                self.branch2 = original_model.branch2
-                self.branch3 = original_model.branch3
-                self.branch4 = original_model.branch4
-                
-            def forward(self, x):
-                # Embedding path
-                x = self.microstate_embedding(x)
-                x = x + self.positional_embedding.unsqueeze(0)
-                x = x.transpose(1, 2)
-                
-                # Process each branch (stop before classification)
-                x1 = self.branch1(x).squeeze(-1)  # (batch_size, 256)
-                x2 = self.branch2(x).squeeze(-1)  # (batch_size, 256)
-                x3 = self.branch3(x).squeeze(-1)  # (batch_size, 256)
-                x4 = self.branch4(x).squeeze(-1)  # (batch_size, 256)
-                
-                # Concatenate features from all branches
-                features = torch.cat([x1, x2, x3, x4], dim=1)  # (batch_size, 1024)
-                return features
-                
-        return EmbeddingMultiScaleFeatureExtractor(self.backbone)
-    
-    def _create_multiscale_feature_extractor(self):
-        """Create feature extractor for MultiScaleMicroSNet with one-hot input"""
-        class MultiScaleFeatureExtractor(nn.Module):
-            def __init__(self, original_model):
-                super().__init__()
-                self.branch1 = original_model.branch1
-                self.branch2 = original_model.branch2
-                self.branch3 = original_model.branch3
-                self.branch4 = original_model.branch4
-                
-            def forward(self, x):
-                # One-hot input path (no embedding)
-                # Process each branch (stop before classification)
-                x1 = self.branch1(x).squeeze(-1)  # (batch_size, 256)
-                x2 = self.branch2(x).squeeze(-1)  # (batch_size, 256)
-                x3 = self.branch3(x).squeeze(-1)  # (batch_size, 256)
-                x4 = self.branch4(x).squeeze(-1)  # (batch_size, 256)
-                
-                # Concatenate features from all branches
-                features = torch.cat([x1, x2, x3, x4], dim=1)  # (batch_size, 1024)
-                return features
-                
-        return MultiScaleFeatureExtractor(self.backbone)
-    
+            
     def _create_embedded_feature_extractor(self):
-        """Create feature extractor for legacy EmbeddedMicroSNet (if still exists)"""
+        """Create feature extractor for EmbeddedMicroSNet"""
         class EmbeddedFeatureExtractor(nn.Module):
             def __init__(self, original_model):
                 super().__init__()
@@ -231,6 +65,7 @@ class FeatureExtractor(nn.Module):
                 self.global_pool = original_model.global_pool
                 
             def forward(self, x):
+                # Follow the same forward pass but stop before classifier
                 x = self.microstate_embedding(x)
                 x = x + self.positional_embedding.unsqueeze(0)
                 x = x.transpose(1, 2)
@@ -247,7 +82,7 @@ class FeatureExtractor(nn.Module):
                 x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
                 x = self.dropout(x)
                 
-                x = self.global_pool(x).squeeze(-1)
+                x = self.global_pool(x).squeeze(-1)  # This is our feature vector
                 return x
                 
         return EmbeddedFeatureExtractor(self.backbone)
@@ -269,6 +104,7 @@ class FeatureExtractor(nn.Module):
                 self.feature_fusion = original_model.feature_fusion
                 
             def forward(self, x):
+                # Follow the same forward pass but stop before classifier
                 embedded = self.microstate_embedding(x)
                 embedded = self.positional_encoding(embedded)
                 cnn_input = embedded.transpose(1, 2)
@@ -311,14 +147,14 @@ class FeatureExtractor(nn.Module):
                 transformer_pooled = torch.mean(transformer_out, dim=1)
                 transformer_features = self.transformer_proj(transformer_pooled)
                 
-                # Combine features
+                # Combine features (this is our feature vector)
                 combined = torch.cat([cnn_out, transformer_features], dim=1)
                 return combined
                 
         return LightweightAttentionFeatureExtractor(self.backbone)
     
     def _create_generic_feature_extractor(self):
-        """Create feature extractor for other models"""
+        """Create feature extractor for other models (MicroSNet, MultiScaleMicroSNet)"""
         # Remove the final classification layer
         if hasattr(self.backbone, 'classifier'):
             modules = [module for name, module in self.backbone.named_children() 
@@ -340,30 +176,48 @@ class FeatureExtractor(nn.Module):
                     features = F.adaptive_avg_pool1d(features.flatten(-2, -1), 1).squeeze(-1)
             return features
 
+class MultiModalClassifier(nn.Module):
+    """Classifier that takes features from multiple modalities"""
+    
+    def __init__(self, raw_feature_dim, ms_feature_dim, n_classes, dropout=0.5):
+        super().__init__()
+        
+        self.raw_feature_dim = raw_feature_dim
+        self.ms_feature_dim = ms_feature_dim
+        self.n_classes = n_classes
+        
+        # Feature fusion layer
+        total_features = raw_feature_dim + ms_feature_dim
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(total_features, 512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, n_classes)
+        )
+        
+    def forward(self, raw_features, ms_features):
+        # Concatenate features from both modalities
+        combined_features = torch.cat([raw_features, ms_features], dim=1)
+        return self.classifier(combined_features)
+
 class MicroSNet(nn.Module):
     """
     MicroSNet - Microstate Sequence Network
     Simple 1D Temporal CNN for microstate sequence classification.
-    Supports both one-hot encoding and embedding-based input.
+    Designed for one-hot encoded microstate timeseries.
     """
-    def __init__(self, n_microstates, n_classes, sequence_length, embedding_dim=32, dropout=0.25, use_embedding=False):
+    def __init__(self, n_microstates, n_classes, sequence_length, dropout=0.25):
         super(MicroSNet, self).__init__()
         
         self.n_microstates = n_microstates
         self.n_classes = n_classes
-        self.use_embedding = use_embedding
-        self.embedding_dim = embedding_dim
-        
-        # Embedding components (only used if use_embedding=True)
-        if use_embedding:
-            self.microstate_embedding = nn.Embedding(n_microstates, embedding_dim)
-            self.positional_embedding = nn.Parameter(torch.randn(sequence_length, embedding_dim) * 0.1)
-            input_channels = embedding_dim
-        else:
-            input_channels = n_microstates  # For one-hot encoding
         
         # First temporal convolution block
-        self.conv1 = nn.Conv1d(input_channels, 32, kernel_size=7, padding=3)
+        self.conv1 = nn.Conv1d(n_microstates, 32, kernel_size=7, padding=3)
         self.bn1 = nn.BatchNorm1d(32)
         self.dropout1 = nn.Dropout(dropout)
         
@@ -397,29 +251,12 @@ class MicroSNet(nn.Module):
         
     def forward(self, x):
         """
-        Forward pass - handles both embedding and one-hot input
+        Forward pass
         Args:
-            x: Input tensor 
-               - If use_embedding=True: (batch_size, sequence_length) with microstate indices
-               - If use_embedding=False: (batch_size, n_microstates, sequence_length) one-hot encoded
+            x: Input tensor of shape (batch_size, n_microstates, sequence_length)
         Returns:
             Output tensor of shape (batch_size, n_classes)
         """
-        if self.use_embedding:
-            # Handle categorical input with embeddings
-            # x shape: (batch_size, sequence_length)
-            x = self.microstate_embedding(x)  # (batch_size, sequence_length, embedding_dim)
-            
-            # Add positional embeddings
-            x = x + self.positional_embedding.unsqueeze(0)  # Broadcasting
-            
-            # Transpose for Conv1d: (batch_size, embedding_dim, sequence_length)
-            x = x.transpose(1, 2)
-        else:
-            # Handle one-hot input directly
-            # x already in shape: (batch_size, n_microstates, sequence_length)
-            pass
-        
         # First conv block
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
@@ -451,145 +288,57 @@ class MicroSNet(nn.Module):
 
 class MultiScaleMicroSNet(nn.Module):
     """
-    Multi-scale MicroSNet - Deep Multi-scale Microstate Sequence Network
-    Supports both one-hot encoding and embedding-based input.
+    Multi-scale MicroSNet - Multi-scale Microstate Sequence Network
     Uses parallel branches with different kernel sizes to capture patterns at multiple temporal scales.
-    Covers microstate range from ~20ms to ~130ms with 4 different kernel sizes.
     """
-    def __init__(self, n_microstates, n_classes, sequence_length, embedding_dim=32, dropout=0.25, use_embedding=False):
+    def __init__(self, n_microstates, n_classes, sequence_length, dropout=0.25):
         super(MultiScaleMicroSNet, self).__init__()
         
         self.n_microstates = n_microstates
         self.n_classes = n_classes
-        self.use_embedding = use_embedding
-        self.embedding_dim = embedding_dim
         
-        # Embedding components (only used if use_embedding=True)
-        if use_embedding:
-            self.microstate_embedding = nn.Embedding(n_microstates, embedding_dim)
-            self.positional_embedding = nn.Parameter(torch.randn(sequence_length, embedding_dim) * 0.1)
-            input_channels = embedding_dim
-        else:
-            input_channels = n_microstates  # For one-hot encoding
-        
-        # Branch 1: Very short patterns (~20-30ms equivalent)
+        # Branch 1: Small kernel for immediate transitions (3-point patterns)
         self.branch1 = nn.Sequential(
-            nn.Conv1d(input_channels, 32, kernel_size=3, padding=1),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(32, 64, kernel_size=3, padding=1),
+            nn.Conv1d(n_microstates, 64, kernel_size=3, padding=1),
             nn.BatchNorm1d(64),
             nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
             nn.Dropout(dropout),
-            
             nn.Conv1d(64, 128, kernel_size=3, padding=1),
             nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
             nn.Dropout(dropout),
-            
-            nn.Conv1d(128, 256, kernel_size=3, padding=1),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            
             nn.AdaptiveAvgPool1d(1)
         )
         
-        # Branch 2: Short-medium patterns (~40-60ms equivalent)
+        # Branch 2: Medium kernel for local patterns (11-point patterns)
         self.branch2 = nn.Sequential(
-            nn.Conv1d(input_channels, 32, kernel_size=7, padding=3),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(32, 64, kernel_size=7, padding=3),
+            nn.Conv1d(n_microstates, 64, kernel_size=11, padding=5),
             nn.BatchNorm1d(64),
             nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
             nn.Dropout(dropout),
-            
-            nn.Conv1d(64, 128, kernel_size=7, padding=3),
+            nn.Conv1d(64, 128, kernel_size=11, padding=5),
             nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
             nn.Dropout(dropout),
-            
-            nn.Conv1d(128, 256, kernel_size=7, padding=3),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            
             nn.AdaptiveAvgPool1d(1)
         )
         
-        # Branch 3: Medium-long patterns (~70-100ms equivalent)
+        # Branch 3: Large kernel for phase dynamics (25-point patterns)
         self.branch3 = nn.Sequential(
-            nn.Conv1d(input_channels, 32, kernel_size=15, padding=7),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(32, 64, kernel_size=15, padding=7),
+            nn.Conv1d(n_microstates, 64, kernel_size=25, padding=12),
             nn.BatchNorm1d(64),
             nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
             nn.Dropout(dropout),
-            
-            nn.Conv1d(64, 128, kernel_size=15, padding=7),
+            nn.Conv1d(64, 128, kernel_size=25, padding=12),
             nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
             nn.Dropout(dropout),
-            
-            nn.Conv1d(128, 256, kernel_size=15, padding=7),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            
-            nn.AdaptiveAvgPool1d(1)
-        )
-        
-        # Branch 4: Long patterns (~100-130ms equivalent)
-        self.branch4 = nn.Sequential(
-            nn.Conv1d(input_channels, 32, kernel_size=31, padding=15),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(32, 64, kernel_size=31, padding=15),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(64, 128, kernel_size=31, padding=15),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=1, padding=0),
-            nn.Dropout(dropout),
-            
-            nn.Conv1d(128, 256, kernel_size=31, padding=15),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            
             nn.AdaptiveAvgPool1d(1)
         )
         
         # Classification head
         self.classifier = nn.Sequential(
-            nn.Linear(256 * 4, 512),  # 4 branches * 256 features each
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(512, 256),
+            nn.Linear(128 * 3, 256),  # 3 branches * 128 features each
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(256, 128),
@@ -601,121 +350,103 @@ class MultiScaleMicroSNet(nn.Module):
         
     def forward(self, x):
         """
-        Forward pass - handles both embedding and one-hot input
+        Forward pass
         Args:
-            x: Input tensor 
-               - If use_embedding=True: (batch_size, sequence_length) with microstate indices
-               - If use_embedding=False: (batch_size, n_microstates, sequence_length) one-hot encoded
+            x: Input tensor of shape (batch_size, n_microstates, sequence_length)
         Returns:
             Output tensor of shape (batch_size, n_classes)
         """
-        if self.use_embedding:
-            # Handle categorical input with embeddings
-            # x shape: (batch_size, sequence_length)
-            x = self.microstate_embedding(x)  # (batch_size, sequence_length, embedding_dim)
-            
-            # Add positional embeddings
-            x = x + self.positional_embedding.unsqueeze(0)  # Broadcasting
-            
-            # Transpose for Conv1d: (batch_size, embedding_dim, sequence_length)
-            x = x.transpose(1, 2)
-        else:
-            # Handle one-hot input directly
-            # x already in shape: (batch_size, n_microstates, sequence_length)
-            pass
-        
         # Process each branch
-        x1 = self.branch1(x).squeeze(-1)  # (batch_size, 256)
-        x2 = self.branch2(x).squeeze(-1)  # (batch_size, 256)
-        x3 = self.branch3(x).squeeze(-1)  # (batch_size, 256)
-        x4 = self.branch4(x).squeeze(-1)  # (batch_size, 256)
+        x1 = self.branch1(x).squeeze(-1)  # (batch_size, 128)
+        x2 = self.branch2(x).squeeze(-1)  # (batch_size, 128)
+        x3 = self.branch3(x).squeeze(-1)  # (batch_size, 128)
         
         # Concatenate features from all branches
-        x = torch.cat([x1, x2, x3, x4], dim=1)  # (batch_size, 1024)
+        x = torch.cat([x1, x2, x3], dim=1)  # (batch_size, 384)
         
         # Classification
         x = self.classifier(x)
         
         return x
 
-# class EmbeddedMicroSNet(nn.Module):
-#     """
-#     EmbeddedMicroSNet - Embedding-based Microstate Sequence Network
-#     Uses learnable embeddings instead of one-hot encoding for microstate representation.
-#     """
-#     def __init__(self, n_microstates, n_classes, sequence_length, embedding_dim=32, dropout=0.25):
-#         super(EmbeddedMicroSNet, self).__init__()
+class EmbeddedMicroSNet(nn.Module):
+    """
+    EmbeddedMicroSNet - Embedding-based Microstate Sequence Network
+    Uses learnable embeddings instead of one-hot encoding for microstate representation.
+    """
+    def __init__(self, n_microstates, n_classes, sequence_length, embedding_dim=32, dropout=0.25):
+        super(EmbeddedMicroSNet, self).__init__()
         
-#         self.n_microstates = n_microstates
-#         self.n_classes = n_classes
-#         self.embedding_dim = embedding_dim
+        self.n_microstates = n_microstates
+        self.n_classes = n_classes
+        self.embedding_dim = embedding_dim
         
-#         # Microstate embedding layer
-#         self.microstate_embedding = nn.Embedding(n_microstates, embedding_dim)
+        # Microstate embedding layer
+        self.microstate_embedding = nn.Embedding(n_microstates, embedding_dim)
         
-#         # Optional positional embedding
-#         self.positional_embedding = nn.Parameter(torch.randn(sequence_length, embedding_dim) * 0.1)
+        # Optional positional embedding
+        self.positional_embedding = nn.Parameter(torch.randn(sequence_length, embedding_dim) * 0.1)
         
-#         # Temporal convolution layers
-#         self.conv1 = nn.Conv1d(embedding_dim, 64, kernel_size=7, padding=3)
-#         self.bn1 = nn.BatchNorm1d(64)
+        # Temporal convolution layers
+        self.conv1 = nn.Conv1d(embedding_dim, 64, kernel_size=7, padding=3)
+        self.bn1 = nn.BatchNorm1d(64)
         
-#         self.conv2 = nn.Conv1d(64, 128, kernel_size=7, padding=3)
-#         self.bn2 = nn.BatchNorm1d(128)
+        self.conv2 = nn.Conv1d(64, 128, kernel_size=7, padding=3)
+        self.bn2 = nn.BatchNorm1d(128)
         
-#         self.conv3 = nn.Conv1d(128, 256, kernel_size=7, padding=3)
-#         self.bn3 = nn.BatchNorm1d(256)
+        self.conv3 = nn.Conv1d(128, 256, kernel_size=7, padding=3)
+        self.bn3 = nn.BatchNorm1d(256)
         
-#         self.dropout = nn.Dropout(dropout)
-#         self.global_pool = nn.AdaptiveAvgPool1d(1)
+        self.dropout = nn.Dropout(dropout)
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
         
-#         # Classification head
-#         self.classifier = nn.Sequential(
-#             nn.Linear(256, 128),
-#             nn.ReLU(),
-#             nn.Dropout(0.5),
-#             nn.Linear(128, 64),
-#             nn.ReLU(),
-#             nn.Dropout(0.5),
-#             nn.Linear(64, n_classes),
-#             nn.LogSoftmax(dim=1)
-#         )
+        # Classification head
+        self.classifier = nn.Sequential(
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(64, n_classes),
+            nn.LogSoftmax(dim=1)
+        )
         
-#     def forward(self, x):
-#         """
-#         Forward pass for categorical microstate sequences
-#         Args:
-#             x: Input tensor of shape (batch_size, sequence_length) with microstate indices
-#         Returns:
-#             Output tensor of shape (batch_size, n_classes)
-#         """
-#         # Embed microstates
-#         x = self.microstate_embedding(x)  # (batch_size, sequence_length, embedding_dim)
+    def forward(self, x):
+        """
+        Forward pass for categorical microstate sequences
+        Args:
+            x: Input tensor of shape (batch_size, sequence_length) with microstate indices
+        Returns:
+            Output tensor of shape (batch_size, n_classes)
+        """
+        # Embed microstates
+        x = self.microstate_embedding(x)  # (batch_size, sequence_length, embedding_dim)
         
-#         # Add positional embeddings
-#         x = x + self.positional_embedding.unsqueeze(0)  # Broadcasting
+        # Add positional embeddings
+        x = x + self.positional_embedding.unsqueeze(0)  # Broadcasting
         
-#         # Transpose for Conv1d: (batch_size, embedding_dim, sequence_length)
-#         x = x.transpose(1, 2)
+        # Transpose for Conv1d: (batch_size, embedding_dim, sequence_length)
+        x = x.transpose(1, 2)
         
-#         # Temporal convolutions
-#         x = F.relu(self.bn1(self.conv1(x)))
-#         x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-#         x = self.dropout(x)
+        # Temporal convolutions
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+        x = self.dropout(x)
         
-#         x = F.relu(self.bn2(self.conv2(x)))
-#         x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-#         x = self.dropout(x)
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+        x = self.dropout(x)
         
-#         x = F.relu(self.bn3(self.conv3(x)))
-#         x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
-#         x = self.dropout(x)
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+        x = self.dropout(x)
         
-#         # Global pooling and classification
-#         x = self.global_pool(x).squeeze(-1)  # (batch_size, 256)
-#         x = self.classifier(x)
+        # Global pooling and classification
+        x = self.global_pool(x).squeeze(-1)  # (batch_size, 256)
+        x = self.classifier(x)
         
-#         return x
+        return x
 
 # ============== TRANSFORMER-ENHANCED MODELS ==============
 
@@ -1107,12 +838,7 @@ def get_model(model_name, n_microstates, n_classes, sequence_length, **kwargs):
         n_microstates: int - number of microstate categories
         n_classes: int - number of output classes
         sequence_length: int - length of input sequences
-        **kwargs: additional model-specific arguments including:
-                 - dropout: float (default 0.25)
-                 - embedding_dim: int (for embedding models, default 32)
-                 - use_embedding: bool (for unified models, default False)
-                 - transformer_layers: int (for attention models, default 4)
-                 - transformer_heads: int (for attention models, default 8)
+        **kwargs: additional model-specific arguments
     
     Returns:
         model: nn.Module instance
@@ -1124,65 +850,33 @@ def get_model(model_name, n_microstates, n_classes, sequence_length, **kwargs):
     elif model_name == 'multiscale_microsnet':
         return MultiScaleMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
     elif model_name == 'embedded_microsnet':
-        # For backward compatibility - force use_embedding=True
-        kwargs['use_embedding'] = True
-        return MicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
-    elif model_name == 'embedded_multiscale_microsnet':
-        # For embedded multiscale - force use_embedding=True
-        kwargs['use_embedding'] = True
-        return MultiScaleMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
+        return EmbeddedMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
     elif model_name == 'attention_microsnet':
         return AttentionMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
     elif model_name == 'lightweight_attention_microsnet':
         return LightweightAttentionMicroSNet(n_microstates, n_classes, sequence_length, **kwargs)
     else:
-        available_models = list(MODEL_INFO.keys())
         raise ValueError(f"Unknown model name: {model_name}. "
-                        f"Available models: {available_models}")
+                        f"Available models: 'microsnet', 'multiscale_microsnet', 'embedded_microsnet', "
+                        f"'attention_microsnet', 'lightweight_attention_microsnet'")
 
 
 # Updated model information dictionary
 MODEL_INFO = {
     'microsnet': {
-        'description': 'Deep temporal CNN for microstate sequences - supports both one-hot and embedding input',
-        'input_format': 'one_hot',  # Default format
-        'input_shape': '(batch_size, n_microstates, sequence_length)',
-        'features': 'Single-scale temporal CNN with 4 conv layers',
-        'temporal_scales': ['single_scale_k7'],
-        'complexity': 'Low',
-        'supports_embedding': True,
-        'embedding_input_shape': '(batch_size, sequence_length)'
+        'description': 'Simple temporal CNN for one-hot encoded microstate sequences',
+        'input_format': 'one_hot',
+        'input_shape': '(batch_size, n_microstates, sequence_length)'
     },
     'multiscale_microsnet': {
-        'description': 'Deep multi-scale temporal CNN with parallel branches - supports both one-hot and embedding input',
-        'input_format': 'one_hot',  # Default format
-        'input_shape': '(batch_size, n_microstates, sequence_length)',
-        'features': 'Multi-scale temporal CNN with 4 parallel branches',
-        'temporal_scales': ['k3_20-30ms', 'k7_40-60ms', 'k15_70-100ms', 'k31_100-130ms'],
-        'complexity': 'Medium-High',
-        'supports_embedding': True,
-        'embedding_input_shape': '(batch_size, sequence_length)'
+        'description': 'Multi-scale temporal CNN with parallel branches for different temporal patterns',
+        'input_format': 'one_hot', 
+        'input_shape': '(batch_size, n_microstates, sequence_length)'
     },
     'embedded_microsnet': {
-        'description': 'Deep temporal CNN with learnable microstate embeddings (legacy - use microsnet with use_embedding=True)',
+        'description': 'Embedding-based CNN for categorical microstate sequences',
         'input_format': 'categorical',
-        'input_shape': '(batch_size, sequence_length)',
-        'features': 'Single-scale temporal CNN with embedding layer',
-        'temporal_scales': ['single_scale_k7'],
-        'complexity': 'Low',
-        'supports_embedding': True,
-        'is_legacy': True,
-        'recommended_alternative': 'microsnet with use_embedding=True'
-    },
-    'embedded_multiscale_microsnet': {
-        'description': 'Deep multi-scale temporal CNN with learnable microstate embeddings',
-        'input_format': 'categorical',
-        'input_shape': '(batch_size, sequence_length)',
-        'features': 'Multi-scale temporal CNN with embedding layer and 4 parallel branches',
-        'temporal_scales': ['k3_20-30ms', 'k7_40-60ms', 'k15_70-100ms', 'k31_100-130ms'],
-        'complexity': 'Medium-High',
-        'supports_embedding': True,
-        'recommended_alternative': 'multiscale_microsnet with use_embedding=True'
+        'input_shape': '(batch_size, sequence_length)'
     },
     'attention_microsnet': {
         'description': 'Transformer-enhanced hierarchical multiscale CNN with attention mechanisms',
@@ -1190,8 +884,7 @@ MODEL_INFO = {
         'input_shape': '(batch_size, sequence_length)',
         'features': 'Hierarchical CNNs + Transformer + Local Attention',
         'temporal_scales': [20, 84, 164, 204, 'global_transformer', 'local_attention'],
-        'complexity': 'High',
-        'supports_embedding': True
+        'complexity': 'High'
     },
     'lightweight_attention_microsnet': {
         'description': 'Simplified CNN + transformer for faster training',
@@ -1199,75 +892,6 @@ MODEL_INFO = {
         'input_shape': '(batch_size, sequence_length)',
         'features': 'CNN + Lightweight Transformer',
         'temporal_scales': [84, 'global_transformer'],
-        'complexity': 'Medium',
-        'supports_embedding': True
+        'complexity': 'Medium'
     }
 }
-
-
-def print_model_info(model_name=None):
-    """
-    Print information about available models
-    
-    Args:
-        model_name: str, optional - specific model to show info for
-    """
-    if model_name:
-        model_name = model_name.lower()
-        if model_name in MODEL_INFO:
-            info = MODEL_INFO[model_name]
-            print(f"\n=== {model_name.upper()} ===")
-            print(f"Description: {info['description']}")
-            print(f"Input format: {info['input_format']}")
-            print(f"Input shape: {info['input_shape']}")
-            print(f"Features: {info['features']}")
-            print(f"Temporal scales: {info['temporal_scales']}")
-            print(f"Complexity: {info['complexity']}")
-            if info.get('supports_embedding'):
-                print(f"Supports embedding: Yes")
-                if 'embedding_input_shape' in info:
-                    print(f"Embedding input shape: {info['embedding_input_shape']}")
-            if info.get('is_legacy'):
-                print(f"⚠️  Legacy model - consider using: {info['recommended_alternative']}")
-        else:
-            print(f"Model '{model_name}' not found. Available models: {list(MODEL_INFO.keys())}")
-    else:
-        print("\n=== AVAILABLE MODELS ===")
-        for name, info in MODEL_INFO.items():
-            legacy_marker = " (Legacy)" if info.get('is_legacy') else ""
-            embedding_marker = " [Embedding Support]" if info.get('supports_embedding') else ""
-            print(f"{name.upper()}{legacy_marker}{embedding_marker}: {info['description']}")
-
-
-def get_model_input_format(model_name):
-    """
-    Get the expected input format for a model
-    
-    Args:
-        model_name: str - model identifier
-        
-    Returns:
-        str: 'one_hot' or 'categorical'
-    """
-    model_name = model_name.lower()
-    if model_name in MODEL_INFO:
-        return MODEL_INFO[model_name]['input_format']
-    else:
-        raise ValueError(f"Unknown model name: {model_name}")
-
-
-def supports_embedding(model_name):
-    """
-    Check if a model supports embedding input
-    
-    Args:
-        model_name: str - model identifier
-        
-    Returns:
-        bool: True if model supports embedding input
-    """
-    model_name = model_name.lower()
-    if model_name in MODEL_INFO:
-        return MODEL_INFO[model_name].get('supports_embedding', False)
-    else:
-        return False
