@@ -1,300 +1,148 @@
 '''
-Script to train model on 50 subjects, training DeepConvNet on Microstates timeseries
-
+Script to train DeepConvNet on 50 subjects using LOSO (Leave-One-Subject-Out) methodology
+Subject-independent paradigm with 4-fold cross-validation on all 49 remaining subjects
+Uses shared functions from mmf for maximum code reusability and memory efficiency
 '''
 import os
 import sys
-import pickle
+import argparse
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set_theme(style="darkgrid")
 
-
 from braindecode.models import Deep4Net
-from braindecode.classifier import EEGClassifier
 
 import torch
-import torch.nn as nn
-from torch.utils.data import TensorDataset, DataLoader
-
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-
 from lib import my_functions as mf
-
-print(f'==================== Start of script {os.path.basename(__file__)}! ====================')
-
-# Explicit CUDA setup
-if torch.cuda.is_available():
-    device = torch.device("cuda:0")  # Specify GPU 0 explicitly
-    torch.cuda.set_device(0)
-    print(f"Using GPU: {torch.cuda.get_device_name(0)}")
-    print(f"CUDA Version: {torch.version.cuda}")
-    print(f"Available GPUs: {torch.cuda.device_count()}")
-else:
-    device = torch.device("cpu")
-    print("CUDA not available, using CPU")
-
-# ---------------------------# Load files ---------------------------
-data_path = 'Data/'
-type_of_subject = 'independent'  # 'independent' or 'adaptive'
-output_path = f'Output/ica_rest_all/{type_of_subject}/'
-input_path = 'Output/ica_rest_all/'
-# Making sure all paths exist
-if not os.path.exists(input_path):
-    os.makedirs(input_path)
-if not os.path.exists(output_path):
-    os.makedirs(output_path)
-
-# Parameters 
-do_all = False
-n_subjects = 50
-# excluded_from_training = [2, 12, 14, 20, 22, 23, 30, 39, 46]
-excluded_from_training = [-1]
-num_epochs = 100
-subject_list = list(range(n_subjects))
-all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all, data_path=data_path)
+from lib import my_models_functions as mmf 
 
 
-kmeans_path = os.path.join(input_path, 'modkmeans_results', 'ms_timeseries')
-ms_timeseries_path = os.path.join(kmeans_path, 'ms_timeseries_harmonize.pkl')
-with open(ms_timeseries_path, 'rb') as f:
-    finals_ls = pickle.load(f)
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-mf.set_seed(42)
-
-
-# ---------- Loop Through Subjects (Leave-One-Subject-Out) ----------
-# ---------- Loop Through First Subject Only ----------
-if n_subjects == 1:
-    test_subjects = [0]
-else:
-    test_subjects = list(range(n_subjects))
+def main():
+    """Main LOSO training function using shared mmf functions"""
+    # Argument parsing
+    parser = argparse.ArgumentParser(description='PyTorch DeepConvNet EEG Classification with LOSO and 4-fold CV')
+    parser.add_argument('--batch-size', type=int, default=32, metavar='N',
+                        help='input batch size for training (default: 32)')
+    parser.add_argument('--epochs', type=int, default=100, metavar='N',
+                        help='number of epochs to train (default: 100)')
+    parser.add_argument('--lr', type=float, default=1e-3, metavar='LR',
+                        help='learning rate (default: 1e-3)')
+    parser.add_argument('--no-cuda', action='store_true', default=False,
+                        help='disables CUDA training')
+    parser.add_argument('--seed', type=int, default=42, metavar='S',
+                        help='random seed (default: 42)')
+    parser.add_argument('--log-interval', type=int, default=10, metavar='N',
+                        help='how many batches to wait before logging training status')
+    parser.add_argument('--n-subjects', type=int, default=50, metavar='N',
+                        help='number of subjects to process (default: 50)')
+    parser.add_argument('--type-of-subject', type=str, default='independent',
+                        choices=['independent', 'dependent', 'adaptive'],
+                        help='type of subject analysis (default: independent)')
+    parser.add_argument('--n-folds', type=int, default=4, metavar='K',
+                        help='number of CV folds (default: 4)')
+    parser.add_argument('--save-model', action='store_true', default=True,
+                        help='For Saving the current Model')
     
-output_file = os.path.join(output_path, f'{type_of_subject}_results_ica_rest_all.npy')
-
-for test_id in test_subjects:
+    args = parser.parse_args()
     
+    print(f'==================== Start of script {os.path.basename(__file__)}! ====================')
+    print(f'DeepConvNet LOSO with {args.n_folds}-fold Cross-Validation on all 49 remaining subjects')
+    
+    # Device setup
+    use_cuda = not args.no_cuda and torch.cuda.is_available()
+    device = torch.device("cuda" if use_cuda else "cpu")
+    print(f"Using device: {device}")
+    
+    if use_cuda:
+        print(f"CUDA Version: {torch.version.cuda}")
+        print(f"Available GPUs: {torch.cuda.device_count()}")
+    
+    mf.print_memory_status("- INITIAL STARTUP")
+    
+    # Set seed for reproducibility
+    mf.set_seed(args.seed)
+    
+    # Setup paths
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(script_dir))
+    data_path = os.path.join(project_root, 'Data') + os.sep
+    output_folder = os.path.join(project_root, 'Output') + os.sep
+    output_path = f'{output_folder}ica_rest_all/{args.type_of_subject}/{args.type_of_subject}_dcn_{args.n_folds}fold_results/'
+    if not os.path.exists(output_path):
+        os.makedirs(output_path, exist_ok=True)
+
+    # LOSO Training loop - using shared mmf function
+    all_results = []
+    output_file = os.path.join(output_path, f'{args.type_of_subject}_dcn_{args.n_folds}fold_results.npy')
+    
+    # Check for existing results and resume if needed
+    start_subject = 0
     if os.path.exists(output_file):
-        results = np.load(output_file, allow_pickle=True).item()
-        all_train_accuracies = results['train_accuracies']
-        all_train_losses = results['train_losses']
-        all_test_accuracies = results['test_accuracies']
-        all_val_accuracies = results['val_accuracies']
-        all_val_losses = results['val_losses']
-        all_models = results['models']
-    else:
-        all_train_accuracies = []
-        all_train_losses = []
-        all_test_accuracies = []
-        all_val_accuracies = []
-        all_val_losses = []
-        all_models = []
+        print(f"Found existing results file: {output_file}")
+        existing_results = np.load(output_file, allow_pickle=True).item()
+        n_existing = len(existing_results.get('test_balanced_accuracies', []))
+        print(f"Found {n_existing} existing subjects. Resuming from subject {n_existing}...")
+        
+        # Convert existing results to our format
+        for i in range(n_existing):
+            result = {
+                'test_subject_id': existing_results.get('test_subject_ids', list(range(n_existing)))[i],
+                'remaining_subject_ids': existing_results.get('remaining_subject_ids', [list(range(args.n_subjects))] * n_existing)[i],
+                'n_folds': existing_results.get('n_folds', [args.n_folds] * n_existing)[i],
+                'cv_balanced_accuracies': existing_results['cv_balanced_accuracies'][i],
+                'cv_f1_scores': existing_results['cv_f1_scores'][i],
+                'mean_cv_balanced_acc': existing_results['mean_cv_balanced_accs'][i],
+                'std_cv_balanced_acc': existing_results['std_cv_balanced_accs'][i],
+                'mean_cv_f1': existing_results['mean_cv_f1s'][i],
+                'std_cv_f1': existing_results['std_cv_f1s'][i],
+                'test_balanced_accuracy': existing_results['test_balanced_accuracies'][i],
+                'test_f1_macro': existing_results['test_f1_macros'][i],
+                'confusion_matrix': existing_results['confusion_matrices'][i],
+                'best_fold_idx': existing_results['best_fold_indices'][i],
+                'train_losses_mean': existing_results['train_curves_mean']['train_losses_mean'][i],
+                'train_balanced_accuracies_mean': existing_results['train_curves_mean']['train_balanced_accuracies_mean'][i],
+                'train_f1_macros_mean': existing_results['train_curves_mean']['train_f1_macros_mean'][i],
+                'val_losses_mean': existing_results['train_curves_mean']['val_losses_mean'][i],
+                'val_balanced_accuracies_mean': existing_results['train_curves_mean']['val_balanced_accuracies_mean'][i],
+                'val_f1_macros_mean': existing_results['train_curves_mean']['val_f1_macros_mean'][i],
+                'best_model': existing_results['best_models'][i] if 'best_models' in existing_results else None
+            }
+            all_results.append(result)
+        start_subject = n_existing
     
-    if len(all_train_accuracies) > test_id:
-        print(f"Skipping Subject {test_id} as it has already been processed.")
-        continue
-    print(f"\n\n==================== Subject {test_id} ====================")
+    # LOSO loop: each subject becomes test subject once
+    for test_subject_id in range(start_subject, args.n_subjects):
+        mf.print_memory_status(f"- LOSO ITERATION {test_subject_id} START")
+        
+        # Use the shared LOSO training function from mmf
+        result = mmf.train_loso_subject(
+            test_subject_id=test_subject_id,
+            args=args,
+            device=device,
+            data_path=data_path,
+            model_class=Deep4Net,
+            model_name="DeepConvNet"
+        )
+        all_results.append(result)
+        
+        # Save intermediate results using shared mmf function
+        if args.save_model:
+            mmf.save_loso_results(all_results, output_file)
+            print(f"Results saved to {output_file}")
+        
+        print(f"✅ LOSO iteration {test_subject_id} processed successfully.\n")
+        mf.print_memory_status(f"- LOSO ITERATION {test_subject_id} END")
+    
+    # Final summary - using shared mmf function
+    mmf.print_final_summary(all_results, "DeepConvNet LOSO", args.n_folds)
+    
+    # Plot results - using shared mmf function  
+    mmf.plot_all_results(all_results, output_path, args.type_of_subject, "DCN_LOSO", len(all_results))
+    
+    print('==================== End of script! ====================')
 
-    mf.set_seed(42)
-    if torch.cuda.is_available():
-        print("CUDA is available. Using GPU for training.")
-        device = torch.device("cuda")
-    else:
-        print("CUDA is not available. Using CPU for training.")
-        device = torch.device("cpu")
 
-
-    # Choose validation subjects (4 random ones not equal to test_id)
-    val_candidates, val_ids = mf.get_val_ids(42, test_id, excluded_from_training)
-
-    # Remaining for training
-    train_ids = [i for i in val_candidates if i not in val_ids]
-
-    # Concatenate training data
-    x_train = torch.cat([torch.tensor(all_data[i], dtype=torch.float32).squeeze(1) for i in train_ids], dim=0)
-    y_train = torch.cat([torch.tensor(all_y[i], dtype=torch.long) for i in train_ids], dim=0)
-
-    # Concatenate validation data
-    x_val = torch.cat([torch.tensor(all_data[i], dtype=torch.float32).squeeze(1) for i in val_ids], dim=0)
-    y_val = torch.cat([torch.tensor(all_y[i], dtype=torch.long) for i in val_ids], dim=0)
-
-    # Test subject
-    x_test = torch.tensor(all_data[test_id], dtype=torch.float32).squeeze(1)
-    y_test = torch.tensor(all_y[test_id], dtype=torch.long)
-
-    # ---------- DataLoaders ----------
-    batch_size = 32
-    train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(TensorDataset(x_val, y_val), batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(TensorDataset(x_test, y_test), batch_size=batch_size, shuffle=False)
-
-    # ---------- Model ----------
-    base_model = Deep4Net(
-        n_chans=x_train.shape[1],
-        n_outputs=len(torch.unique(y_train)),
-        input_window_samples=x_train.shape[2],
-        final_conv_length='auto'
-    )
-
-    model = EEGClassifier(
-        base_model,
-        criterion=nn.NLLLoss(),
-        optimizer=torch.optim.Adam,
-        optimizer__lr=1e-3,
-        train_split=None,
-        device=device
-    )
-
-    net = model.module.to(device)
-    criterion = nn.NLLLoss()
-    optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
-
-    # ---------- Training ----------
-
-    train_losses, val_losses = [], []
-    train_accuracies, val_accuracies = [], []
-
-    for epoch in range(num_epochs):
-        net.train()
-        train_loss, train_correct, train_total = 0, 0, 0
-        for batch_x, batch_y in train_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-            optimizer.zero_grad()
-            outputs = net(batch_x)
-            loss = criterion(outputs, batch_y)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item() * batch_x.size(0)
-            preds = outputs.argmax(dim=1)
-            train_correct += (preds == batch_y).sum().item()
-            train_total += batch_y.size(0)
-
-        train_loss /= train_total
-        train_acc = train_correct / train_total * 100
-        train_losses.append(train_loss)
-        train_accuracies.append(train_acc)
-
-        # ---------- Validation ----------
-        net.eval()
-        val_loss, val_correct, val_total = 0, 0, 0
-        with torch.no_grad():
-            for batch_x, batch_y in val_loader:
-                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-                outputs = net(batch_x)
-                loss = criterion(outputs, batch_y)
-                val_loss += loss.item() * batch_x.size(0)
-                preds = outputs.argmax(dim=1)
-                val_correct += (preds == batch_y).sum().item()
-                val_total += batch_y.size(0)
-
-        val_loss /= val_total
-        val_acc = val_correct / val_total * 100
-        val_losses.append(val_loss)
-        val_accuracies.append(val_acc)
-
-        if (epoch + 1) % 10 == 0 or epoch == num_epochs - 1:
-            print(f"Epoch {epoch+1:02d}/{num_epochs} | "
-                f"Train Loss: {train_loss:.4f}, Acc: {train_acc:.2f}% | "
-                f"Val Loss: {val_loss:.4f}, Acc: {val_acc:.2f}%")
-
-    # ---------- Test ----------
-    net.eval()
-    test_correct, test_total = 0, 0
-    with torch.no_grad():
-        for batch_x, batch_y in test_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-            outputs = net(batch_x)
-            preds = outputs.argmax(dim=1)
-            test_correct += (preds == batch_y).sum().item()
-            test_total += batch_y.size(0)
-
-    test_acc = test_correct / test_total * 100
-    print(f"✅ Subject {test_id} Test Accuracy: {test_acc:.2f}%")
-
-    # ---------- Save Results ----------
-    all_train_accuracies.append(train_accuracies)
-    all_train_losses.append(train_losses)
-    all_test_accuracies.append(test_acc)
-    all_val_accuracies.append(val_accuracies)
-    all_val_losses.append(val_losses)
-    all_models.append(model)
-
-    results = {
-        'train_accuracies': all_train_accuracies,
-        'train_losses': all_train_losses,
-        'test_accuracies': all_test_accuracies,
-        'val_accuracies': all_val_accuracies,
-        'val_losses': all_val_losses,
-        'models': all_models
-    }
-    np.save(output_file, results)
-    print(f"Results saved to {output_file}")
-    print(f"✅ Subject {test_id} processed successfully.\n\n")
-
-# End of loop through subjects
-
-# ------------------------- plotting results -------------------------
-# plot all test accuracies
-plt.figure(figsize=(10, 6))
-plt.plot(all_test_accuracies, marker='o', linestyle='-')
-plt.title(f'Subject {type_of_subject} DeepConvNet Test Accuracies for Each Subject')
-plt.xlabel('Subject ID')
-plt.ylabel('Test Accuracy (%)')
-plt.xticks(range(n_subjects), [f'S{i}' for i in range(n_subjects)], rotation=45)
-
-plt.tight_layout()
-plt.savefig(os.path.join(output_path, f'{type_of_subject}_DCN_test_accuracies.png'))
-
-# plot mean and std of train and val accuracies
-df = pd.DataFrame({
-    'Train Accuracy': all_train_accuracies,
-    'Val Accuracy': all_val_accuracies,
-    'Train loss': all_train_losses,
-    'Val loss': all_val_losses
-})
-num_epochs = 100
-# Compute mean and std for each metric across epochs
-metrics = ['Train Accuracy', 'Val Accuracy', 'Train loss', 'Val loss']
-mean_std_df = pd.DataFrame({'Epoch': np.arange(1, num_epochs  + 1)})
-
-for metric in metrics:
-    values = np.array(df[metric].tolist())  # shape: (n_epochs, n_subjects)
-    mean_std_df[f"{metric} Mean"] = values.mean(axis=0)
-    mean_std_df[f"{metric} Std"] = values.std(axis=0)
-
-# --- Plotting ---
-fig, axes = plt.subplots(2, 2, figsize=(14, 8), sharex=True, sharey='row')
-fig.suptitle(f'Subject {type_of_subject} DeepConvNet Training and Validation Metrics Over Epochs', fontsize=16)
-
-plot_params = [
-    ("Train Accuracy", axes[0, 0], "blue"),
-    ("Val Accuracy", axes[0, 1], "green"),
-    ("Train loss", axes[1, 0], "red"),
-    ("Val loss", axes[1, 1], "orange"),
-]
-
-for metric, ax, color in plot_params:
-    mean = mean_std_df[f"{metric} Mean"]
-    std = mean_std_df[f"{metric} Std"]
-    epoch = mean_std_df["Epoch"]
-
-    ax.plot(epoch, mean, label=metric, color=color)
-    ax.fill_between(epoch, mean - std, mean + std, color=color, alpha=0.3)
-    ax.set_title(f"{metric} over Epochs")
-    ax.set_xlabel("Epoch")
-    ylabel = "Accuracy (%)" if "Accuracy" in metric else "Loss"
-    ax.set_ylabel(ylabel)
-
-plt.tight_layout()
-plt.savefig(os.path.join(output_path, f'{type_of_subject}_DCN_training_validation_metrics.png'))
-plt.legend()
-plt.subplots_adjust(top=0.9)  # Adjust top to make room for the suptitle
-plt.close()
-
-print('==================== End of script dcn_indep.py! ===================')
+if __name__ == '__main__':
+    main()
