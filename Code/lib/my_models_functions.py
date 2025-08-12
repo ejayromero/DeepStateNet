@@ -869,28 +869,63 @@ def load_subjects_batch(subject_ids, args, data_path, data_loader):
     del x_list, y_list  # Free intermediate memory
     return x_combined, y_combined
 
-
 def aggregate_fold_training_curves(fold_results):
-    """Aggregate training curves across folds (calculate mean and std)"""
+    """Aggregate training curves across folds with different lengths due to early stopping"""
     if len(fold_results) == 0:
         return {}
     
-    all_epochs = len(fold_results[0]['train_losses'])
+    # Find the maximum length across all folds
+    max_epochs = max(len(fold['train_losses']) for fold in fold_results)
+    
+    if max_epochs == 0:
+        return {}
+    
+    print(f"Aggregating training curves: max epochs = {max_epochs}")
+    
+    # Pad shorter curves with their last value to make them all the same length
+    def pad_curve(curve, target_length):
+        """Pad a curve to target length by repeating the last value"""
+        if len(curve) == 0:
+            return [0.0] * target_length
+        elif len(curve) >= target_length:
+            return curve[:target_length]
+        else:
+            # Pad with the last value
+            last_value = curve[-1]
+            return curve + [last_value] * (target_length - len(curve))
+    
+    # Collect and pad all curves
+    padded_train_losses = []
+    padded_train_bal_accs = []
+    padded_train_f1s = []
+    padded_val_losses = []
+    padded_val_bal_accs = []
+    padded_val_f1s = []
+    
+    for fold in fold_results:
+        padded_train_losses.append(pad_curve(fold['train_losses'], max_epochs))
+        padded_train_bal_accs.append(pad_curve(fold['train_balanced_accuracies'], max_epochs))
+        padded_train_f1s.append(pad_curve(fold['train_f1_macros'], max_epochs))
+        padded_val_losses.append(pad_curve(fold['val_losses'], max_epochs))
+        padded_val_bal_accs.append(pad_curve(fold['val_balanced_accuracies'], max_epochs))
+        padded_val_f1s.append(pad_curve(fold['val_f1_macros'], max_epochs))
     
     # Calculate mean and std across folds for each epoch
-    train_losses_mean = np.mean([fold['train_losses'] for fold in fold_results], axis=0)
-    train_losses_std = np.std([fold['train_losses'] for fold in fold_results], axis=0)
-    train_bal_accs_mean = np.mean([fold['train_balanced_accuracies'] for fold in fold_results], axis=0)
-    train_bal_accs_std = np.std([fold['train_balanced_accuracies'] for fold in fold_results], axis=0)
-    train_f1s_mean = np.mean([fold['train_f1_macros'] for fold in fold_results], axis=0)
-    train_f1s_std = np.std([fold['train_f1_macros'] for fold in fold_results], axis=0)
+    train_losses_mean = np.mean(padded_train_losses, axis=0)
+    train_losses_std = np.std(padded_train_losses, axis=0)
+    train_bal_accs_mean = np.mean(padded_train_bal_accs, axis=0)
+    train_bal_accs_std = np.std(padded_train_bal_accs, axis=0)
+    train_f1s_mean = np.mean(padded_train_f1s, axis=0)
+    train_f1s_std = np.std(padded_train_f1s, axis=0)
     
-    val_losses_mean = np.mean([fold['val_losses'] for fold in fold_results], axis=0)
-    val_losses_std = np.std([fold['val_losses'] for fold in fold_results], axis=0)
-    val_bal_accs_mean = np.mean([fold['val_balanced_accuracies'] for fold in fold_results], axis=0)
-    val_bal_accs_std = np.std([fold['val_balanced_accuracies'] for fold in fold_results], axis=0)
-    val_f1s_mean = np.mean([fold['val_f1_macros'] for fold in fold_results], axis=0)
-    val_f1s_std = np.std([fold['val_f1_macros'] for fold in fold_results], axis=0)
+    val_losses_mean = np.mean(padded_val_losses, axis=0)
+    val_losses_std = np.std(padded_val_losses, axis=0)
+    val_bal_accs_mean = np.mean(padded_val_bal_accs, axis=0)
+    val_bal_accs_std = np.std(padded_val_bal_accs, axis=0)
+    val_f1s_mean = np.mean(padded_val_f1s, axis=0)
+    val_f1s_std = np.std(padded_val_f1s, axis=0)
+    
+    print(f"Successfully aggregated curves with {max_epochs} epochs")
     
     return {
         'train_losses_mean': train_losses_mean.tolist(),
@@ -905,8 +940,9 @@ def aggregate_fold_training_curves(fold_results):
         'val_balanced_accuracies_std': val_bal_accs_std.tolist(),
         'val_f1_macros_mean': val_f1s_mean.tolist(),
         'val_f1_macros_std': val_f1s_std.tolist(),
+        'max_epochs_used': max_epochs,
+        'fold_epoch_counts': [len(fold['train_losses']) for fold in fold_results]
     }
-
 
 def print_cv_summary(cv_balanced_accs, cv_f1_scores, n_folds):
     """Print cross-validation summary statistics"""
