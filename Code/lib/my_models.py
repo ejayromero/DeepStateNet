@@ -261,6 +261,58 @@ class FeatureExtractor(nn.Module):
                 
         return EmbeddingMicroStateNetFeatureExtractor(self.backbone)
 
+    def _create_embedding_multiscale_feature_extractor(self):
+        """Create feature extractor for MultiScaleMicroStateNet with embedding"""
+        class EmbeddingMultiScaleFeatureExtractor(nn.Module):
+            def __init__(self, original_model):
+                super().__init__()
+                self.microstate_embedding = original_model.microstate_embedding
+                self.embedding_dim = original_model.embedding_dim
+                
+                # MultiScaleMicroStateNet has only 3 branches for microstate processing
+                if hasattr(original_model, 'ms_branch1'):
+                    # Embedding mode with separate microstate branches
+                    self.ms_branch1 = original_model.ms_branch1
+                    self.ms_branch2 = original_model.ms_branch2
+                    self.ms_branch3 = original_model.ms_branch3
+                    self.use_ms_branches = True
+                else:
+                    # Fallback to regular branches
+                    self.branch1 = original_model.branch1
+                    self.branch2 = original_model.branch2
+                    self.branch3 = original_model.branch3
+                    self.use_ms_branches = False
+                
+            def forward(self, x):
+                # Embedding path with adaptive positional encoding
+                embedded = self.microstate_embedding(x)  # (batch, seq_len, embedding_dim)
+                
+                # Create adaptive positional encoding (matches your MultiScaleMicroStateNet)
+                seq_len = embedded.shape[1]
+                pos_emb = torch.arange(seq_len, device=embedded.device).float().unsqueeze(0).unsqueeze(-1)
+                pos_emb = pos_emb / seq_len  # Normalize to [0, 1]
+                pos_emb = pos_emb.expand(embedded.shape[0], seq_len, self.embedding_dim)
+                embedded = embedded + pos_emb * 0.1  # Add positional information
+                
+                # Transpose for conv1d: (batch, embedding_dim, seq_len)
+                x = embedded.transpose(1, 2)
+                
+                # Process each branch (stop before classification)
+                if self.use_ms_branches:
+                    x1 = self.ms_branch1(x).squeeze(-1)  # (batch_size, 128)
+                    x2 = self.ms_branch2(x).squeeze(-1)  # (batch_size, 128)
+                    x3 = self.ms_branch3(x).squeeze(-1)  # (batch_size, 128)
+                else:
+                    x1 = self.branch1(x).squeeze(-1)  # (batch_size, 128)
+                    x2 = self.branch2(x).squeeze(-1)  # (batch_size, 128)
+                    x3 = self.branch3(x).squeeze(-1)  # (batch_size, 128)
+                
+                # Concatenate features from all 3 branches (not 4!)
+                features = torch.cat([x1, x2, x3], dim=1)  # (batch_size, 384)
+                return features
+                
+        return EmbeddingMultiScaleFeatureExtractor(self.backbone)
+
     def _create_multiscale_feature_extractor(self):
         """Create feature extractor for MultiScaleMicroStateNet with one-hot input"""
         class MultiScaleFeatureExtractor(nn.Module):
