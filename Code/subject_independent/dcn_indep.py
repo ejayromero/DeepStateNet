@@ -42,6 +42,9 @@ def main():
                         help='type of subject analysis (default: independent)')
     parser.add_argument('--n-folds', type=int, default=4, metavar='K',
                         help='number of CV folds (default: 4)')
+    # In dcn_indep.py, msn_indep.py, dsn_indep.py - add this line:
+    parser.add_argument('--early-stopping-patience', type=int, default=15,
+                        help='early stopping patience (default: 15)')
     parser.add_argument('--save-model', action='store_true', default=True,
                         help='For Saving the current Model')
     

@@ -580,7 +580,7 @@ def train_subject(subject_id, args, device, data_path, model_type='dcn'):
 
 def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
     """
-    Unified LOSO training function for any model type
+    Unified LOSO training function for any model type with early stopping
     
     Args:
         test_subject_id: Subject ID to use for testing
@@ -589,6 +589,8 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
         data_path: Path to data directory
         model_type: 'dcn', 'microstate', or 'fusion'
     """
+    import copy  # Add this import for model state copying
+    
     print(f"\n▶ {model_type.upper()} LOSO Training - Test Subject {test_subject_id}")
     
     # Get all remaining subjects (49 subjects)
@@ -617,7 +619,6 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
     print(f"Test subject {test_subject_id} loaded")
     
     mf.print_memory_status(f"After Loading Test Subject {test_subject_id}")
-
 
     # 4-Fold Cross Validation on remaining subjects
     dummy_y = [0] * len(all_remaining_subjects)
@@ -654,18 +655,32 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
         # Create model
         model, criterion, optimizer = ModelFactory.create_model(model_type, data_info, args, device)
         
-        # Training loop (same as train_subject)
+        # Early stopping parameters
+        early_stopping_patience = getattr(args, 'early_stopping_patience', 15)
+        min_improvement = 1e-4
+        best_val_loss = float('inf')
+        best_val_acc = 0.0
+        patience_counter = 0
+        best_model_state = None
+        best_epoch = 0
+        
+        # Training loop with early stopping
         fold_train_losses, fold_val_losses = [], []
         fold_train_balanced_accs, fold_val_balanced_accs = [], []
         fold_train_f1s, fold_val_f1s = [], []
         
+        print(f"Training {model_type.upper()} Fold {fold + 1} with early stopping (patience={early_stopping_patience})")
+        
         for epoch in range(1, args.epochs + 1):
+            # Training
             train_loss, train_balanced_acc, train_f1 = train_epoch(
                 model, device, train_loader, optimizer, criterion, epoch, 
                 args.log_interval if epoch % 10 == 1 else 999)
             
+            # Validation
             val_loss, val_balanced_acc, val_f1 = validate(model, device, val_loader, criterion)
             
+            # Store metrics
             fold_train_losses.append(train_loss)
             fold_train_balanced_accs.append(train_balanced_acc)
             fold_train_f1s.append(train_f1)
@@ -673,10 +688,62 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
             fold_val_balanced_accs.append(val_balanced_acc)
             fold_val_f1s.append(val_f1)
             
-            if epoch % 20 == 0 or epoch == args.epochs:
+            # Early stopping logic
+            improved = False
+            if val_loss < best_val_loss - min_improvement:
+                best_val_loss = val_loss
+                best_val_acc = val_balanced_acc
+                best_epoch = epoch
+                best_model_state = copy.deepcopy(model.state_dict())
+                patience_counter = 0
+                improved = True
+                print(f"✅ New best validation loss: {val_loss:.6f} (acc: {val_balanced_acc:.2f}%)")
+            else:
+                patience_counter += 1
+            
+            # Check early stopping
+            if patience_counter >= early_stopping_patience:
+                print(f"🛑 Early stopping triggered at epoch {epoch}")
+                print(f"Best epoch: {best_epoch}, Best val acc: {best_val_acc:.2f}%")
+                break
+            
+            # Print epoch results
+            if epoch % 20 == 0 or epoch == args.epochs or improved:
                 print(f"{model_type.upper()} Fold {fold + 1}, Epoch {epoch:02d}/{args.epochs} | "
                       f"Train Bal Acc: {train_balanced_acc:.2f}%, F1: {train_f1:.2f}% | "
-                      f"Val Bal Acc: {val_balanced_acc:.2f}%, F1: {val_f1:.2f}%")
+                      f"Val Bal Acc: {val_balanced_acc:.2f}%, F1: {val_f1:.2f}% | "
+                      f"Patience: {patience_counter}/{early_stopping_patience}")
+        
+        # Restore best model
+        if best_model_state is not None:
+            model.load_state_dict(best_model_state)
+            print(f"🔄 Restored model from epoch {best_epoch} (best val acc: {best_val_acc:.2f}%)")
+            # Truncate training curves to best epoch
+            fold_train_losses = fold_train_losses[:best_epoch]
+            fold_train_balanced_accs = fold_train_balanced_accs[:best_epoch]
+            fold_train_f1s = fold_train_f1s[:best_epoch]
+            fold_val_losses = fold_val_losses[:best_epoch]
+            fold_val_balanced_accs = fold_val_balanced_accs[:best_epoch]
+            fold_val_f1s = fold_val_f1s[:best_epoch]
+        
+        # Final validation with best model
+        model.eval()
+        final_val_preds = []
+        with torch.no_grad():
+            for batch_data in val_loader:
+                if len(batch_data) == 2:  # Standard: (data, target)
+                    data, target = batch_data
+                    data = data.to(device)
+                    output = model(data)
+                elif len(batch_data) == 3:  # Dual modal: (data1, data2, target)
+                    data1, data2, target = batch_data
+                    data1, data2 = data1.to(device), data2.to(device)
+                    output = model(data1, data2)
+                
+                final_val_preds.extend(torch.argmax(output, dim=1).cpu().numpy())
+        
+        final_val_acc = balanced_accuracy_score(val_y.numpy(), final_val_preds) * 100
+        final_val_f1 = f1_score(val_y.numpy(), final_val_preds, average='macro') * 100
         
         # Store fold results
         fold_result = {
@@ -686,17 +753,20 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
             'val_losses': fold_val_losses,
             'val_balanced_accuracies': fold_val_balanced_accs,
             'val_f1_macros': fold_val_f1s,
-            'final_val_balanced_acc': val_balanced_acc,
-            'final_val_f1': val_f1,
+            'final_val_balanced_acc': final_val_acc,
+            'final_val_f1': final_val_f1,
+            'best_epoch': best_epoch,
+            'epochs_saved': args.epochs - best_epoch,
             'model': model,
             'fold_train_subjects': fold_train_subjects,
             'fold_val_subjects': fold_val_subjects
         }
         fold_results.append(fold_result)
-        cv_balanced_accs.append(val_balanced_acc)
-        cv_f1_scores.append(val_f1)
+        cv_balanced_accs.append(final_val_acc)
+        cv_f1_scores.append(final_val_f1)
         
-        print(f"✅ {model_type.upper()} Fold {fold + 1} completed - Val Bal Acc: {val_balanced_acc:.2f}%, F1: {val_f1:.2f}%")
+        print(f"✅ {model_type.upper()} Fold {fold + 1} completed - Final Val Bal Acc: {final_val_acc:.2f}%, F1: {final_val_f1:.2f}%")
+        print(f"   Training stopped at epoch {best_epoch}/{args.epochs} (saved {args.epochs - best_epoch} epochs)")
         
         # Clean up fold memory
         del train_x, train_y, val_x, val_y, train_loader, val_loader
@@ -706,6 +776,14 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
     # Cross-validation summary
     mean_cv_bal_acc, std_cv_bal_acc, mean_cv_f1, std_cv_f1 = print_cv_summary(
         cv_balanced_accs, cv_f1_scores, args.n_folds)
+    
+    # Calculate average best epoch and time savings
+    avg_best_epoch = np.mean([fold['best_epoch'] for fold in fold_results])
+    total_epochs_saved = sum([fold['epochs_saved'] for fold in fold_results])
+    
+    print(f"\n⚡ Early Stopping Summary:")
+    print(f"Average best epoch: {avg_best_epoch:.1f}/{args.epochs}")
+    print(f"Total epochs saved: {total_epochs_saved}/{args.n_folds * args.epochs} ({total_epochs_saved/(args.n_folds * args.epochs)*100:.1f}%)")
     
     # Select best fold model
     best_fold_idx = np.argmax(cv_balanced_accs)
@@ -746,6 +824,8 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
         'best_fold_idx': best_fold_idx,
         'fold_results': fold_results,
         'best_model': best_model,
+        'avg_best_epoch': avg_best_epoch,
+        'total_epochs_saved': total_epochs_saved,
         **training_curves
     }
 
@@ -1120,7 +1200,7 @@ def train_microstate_loso_subject(test_subject_id, args, device, data_path):
     return train_loso(test_subject_id, args, device, data_path, model_type='microstate')
 
 def train_loso_subject(test_subject_id, args, device, data_path, model_class, model_name="Model"):
-    """Backward compatibility wrapper for DCN LOSO training"""
+    """Backward compatibility wrapper for DCN LOSO training with early stopping"""
     return train_loso(test_subject_id, args, device, data_path, model_type='dcn')
 
 def train_fusion_subject(subject_id, args, device, data_path, pretrained_models):
