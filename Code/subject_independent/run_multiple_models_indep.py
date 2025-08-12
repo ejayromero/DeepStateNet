@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Multiple model training script using subprocess
-Supports DCN, MSN (MicroStateNet), and DSN (DeepStateNet) models
-Usage: python run_multiple_models.py
+Multiple independent model training script using subprocess
+Supports DCN_INDEP, MSN_INDEP (MicroStateNet), and DSN_INDEP (DeepStateNet) models
+Usage: python run_multiple_models_indep.py
 """
 
 import subprocess
@@ -52,47 +52,47 @@ def run_command(command, model_name, description=""):
         return False
 
 def create_model_combinations():
-    """Create all combinations of models and settings"""
+    """Create all combinations of independent models and settings"""
     
     # ============ CONFIGURATION ============
     # Which models to run - MODIFY THIS LIST to control what gets trained
-    models_to_run = ['msn', 'dsn']  # Options: 'dcn', 'msn', 'dsn'
+    models_to_run = ['dcn_indep', 'msn_indep', 'dsn_indep']  # Options: 'dcn_indep', 'msn_indep', 'dsn_indep'
     
     # Training parameters
-    clusters = [12]  # Multiple cluster sizes (for MSN and DSN)
-    n_subjects = 50
+    clusters = [5]  # Multiple cluster sizes (for MSN and DSN)
+    n_subjects = 50  # LOSO: each subject becomes test subject once
     epochs = 100
-    n_folds = 4
+    n_folds = 4      # 4-fold CV on remaining 49 subjects
     batch_size = 32
     lr = 1e-3
     
     # MSN/DSN Model configurations (clusters matter for these)
     msn_model_configs = [
-        {'model': 'msn', 'embedding': False, 'name': 'MSN'},
-        {'model': 'multiscale_msn', 'embedding': False, 'name': 'MultiScale MSN'},
-        {'model': 'msn', 'embedding': True, 'name': 'MSN (Embedded)'},
-        {'model': 'multiscale_msn', 'embedding': True, 'name': 'MultiScale MSN (Embedded)'},
+        {'model': 'msn', 'embedding': False, 'name': 'MSN LOSO'},
+        {'model': 'multiscale_msn', 'embedding': False, 'name': 'MultiScale MSN LOSO'},
+        {'model': 'msn', 'embedding': True, 'name': 'MSN LOSO (Embedded)'},
+        {'model': 'multiscale_msn', 'embedding': True, 'name': 'MultiScale MSN LOSO (Embedded)'},
     ]
     
     # DCN configuration (clusters don't matter for DCN)
     dcn_config = {
-        'model': 'dcn',
+        'model': 'dcn_indep',
         'embedding': False,
-        'name': 'DCN',
+        'name': 'DCN LOSO',
         'clusters': None  # DCN doesn't use clusters
     }
     
     combinations = []
     
-    # Add DCN combinations (only if requested)
-    if 'dcn' in models_to_run:
+    # Add DCN_INDEP combinations (only if requested)
+    if 'dcn_indep' in models_to_run:
         combination = {
-            'script': 'dcn',
+            'script': 'dcn_indep',
             'clusters': None,  # DCN doesn't use clusters
-            'model': dcn_config['model'],
+            'model': 'dcn',     # Internal model name
             'embedding': dcn_config['embedding'],
             'name': dcn_config['name'],
-            'description': 'DCN (DeepConvNet)',
+            'description': 'DCN LOSO (Leave-One-Subject-Out)',
             'n_subjects': n_subjects,
             'epochs': epochs,
             'n_folds': n_folds,
@@ -101,12 +101,12 @@ def create_model_combinations():
         }
         combinations.append(combination)
     
-    # Add MSN combinations (only if requested)
-    if 'msn' in models_to_run:
+    # Add MSN_INDEP combinations (only if requested)
+    if 'msn_indep' in models_to_run:
         for cluster_size in clusters:
             for model_config in msn_model_configs:
                 combination = {
-                    'script': 'msn',
+                    'script': 'msn_indep',
                     'clusters': cluster_size,
                     'model': model_config['model'],
                     'embedding': model_config['embedding'],
@@ -120,44 +120,43 @@ def create_model_combinations():
                 }
                 combinations.append(combination)
     
-    # Add DSN combinations (only if requested and MSN is also requested)
-    if 'dsn' in models_to_run:
-        if 'msn' not in models_to_run:
-            print("⚠️  WARNING: DSN requires pretrained MSN models. Please include 'msn' in models_to_run first.")
-            print("    DSN will be skipped for this run.")
-        else:
-            for cluster_size in clusters:
-                for model_config in msn_model_configs:
-                    combination = {
-                        'script': 'dsn',
-                        'clusters': cluster_size,
-                        'model': model_config['model'],
-                        'embedding': model_config['embedding'],
-                        'name': f"DSN + {model_config['name']}",
-                        'description': f"DeepStateNet + {model_config['name']} (c={cluster_size})",
-                        'n_subjects': n_subjects,
-                        'epochs': epochs,
-                        'n_folds': n_folds,
-                        'batch_size': batch_size,
-                        'lr': lr
-                    }
-                    combinations.append(combination)
+    # Add DSN_INDEP combinations (only if requested and requires DCN+MSN pretrained models)
+    if 'dsn_indep' in models_to_run:
+        print("⚠️  WARNING: DSN_INDEP requires pretrained DCN and MSN models from dependent training.")
+        print("    Please ensure you have run dcn.py and msn.py (dependent versions) first.")
+        
+        for cluster_size in clusters:
+            for model_config in msn_model_configs:
+                combination = {
+                    'script': 'dsn_indep',
+                    'clusters': cluster_size,
+                    'model': model_config['model'],
+                    'embedding': model_config['embedding'],
+                    'name': f"DSN LOSO + {model_config['name']}",
+                    'description': f"DeepStateNet LOSO + {model_config['name']} (c={cluster_size})",
+                    'n_subjects': n_subjects,
+                    'epochs': epochs,
+                    'n_folds': n_folds,
+                    'batch_size': batch_size,
+                    'lr': lr
+                }
+                combinations.append(combination)
     
     return combinations, models_to_run
 
 def build_command(script_name, config):
     """Build command for a specific configuration"""
-    script_path = f"Code/subject_dependent/{script_name}.py"
+    script_path = f"Code/subject_independent/{script_name}.py"
     
-    # DCN can run with just defaults - no additional parameters needed
-    if script_name == 'dcn':
+    # DCN_INDEP can run with just defaults - no additional parameters needed
+    if script_name == 'dcn_indep':
         command = [sys.executable, script_path]
-        # DCN will use all its defaults:
+        # DCN_INDEP will use all its defaults:
         # --batch-size 32, --epochs 100, --lr 1e-3, --n-subjects 50, 
-        # --type-of-subject dependent, --n-folds 4, --save-model True
+        # --type-of-subject independent, --n-folds 4, --save-model True
         return command
     
-    # For MSN and DSN, build full command with parameters
+    # For MSN_INDEP and DSN_INDEP, build full command with parameters
     command = [
         sys.executable, script_path,
         '--n-subjects', str(config['n_subjects']),
@@ -167,8 +166,8 @@ def build_command(script_name, config):
         '--lr', str(config['lr'])
     ]
     
-    # Add model-specific parameters for MSN and DSN
-    if script_name in ['msn', 'dsn']:
+    # Add model-specific parameters for MSN_INDEP and DSN_INDEP
+    if script_name in ['msn_indep', 'dsn_indep']:
         command.extend([
             '--n-clusters', str(config['clusters']),
             '--model-name', config['model']
@@ -182,7 +181,7 @@ def build_command(script_name, config):
 
 def check_prerequisites(models_to_run):
     """Check if all required scripts exist"""
-    script_dir = "Code/subject_dependent"
+    script_dir = "Code/subject_independent"
     missing_scripts = []
     
     for model in models_to_run:
@@ -198,13 +197,34 @@ def check_prerequisites(models_to_run):
             print(f"  - {script}")
         return False
     
+    # Check for pretrained models if DSN_INDEP is requested
+    if 'dsn_indep' in models_to_run:
+        print(f"\n🔍 Checking for pretrained models (required for DSN_INDEP)...")
+        output_dir = "Output/ica_rest_all/dependent"
+        
+        # Check for DCN dependent models
+        dcn_results_path = f"{output_dir}/dependent_dcn_4fold_results/dependent_dcn_4fold_results.npy"
+        if not os.path.exists(dcn_results_path):
+            print(f"⚠️  Missing DCN dependent results: {dcn_results_path}")
+            print("    Please run dcn.py (dependent version) first.")
+        else:
+            print(f"✅ Found DCN dependent results")
+        
+        # Check for MSN dependent models (at least basic MSN)
+        msn_basic_path = f"{output_dir}/dependent_msn_c12_4fold_results/dependent_msn_c12_4fold_results.npy"
+        if not os.path.exists(msn_basic_path):
+            print(f"⚠️  Missing MSN dependent results: {msn_basic_path}")
+            print("    Please run msn.py (dependent version) first.")
+        else:
+            print(f"✅ Found MSN dependent results")
+    
     return True
 
 def main():
-    """Main function to run multiple models"""
+    """Main function to run multiple independent models"""
     
     print("="*70)
-    print("🔬 MULTIPLE MODEL TRAINING SCRIPT - DCN, MSN, DSN")
+    print("🔬 MULTIPLE INDEPENDENT MODEL TRAINING SCRIPT - DCN, MSN, DSN LOSO")
     print("="*70)
     print(f"Current directory: {os.getcwd()}")
     print(f"Python executable: {sys.executable}")
@@ -212,7 +232,9 @@ def main():
     # Create all model combinations
     combinations, models_to_run = create_model_combinations()
     
-    print(f"\n📋 MODELS TO RUN: {', '.join(models_to_run)}")
+    print(f"\n📋 INDEPENDENT MODELS TO RUN: {', '.join(models_to_run)}")
+    print(f"🎯 Training Method: LOSO (Leave-One-Subject-Out)")
+    print(f"📊 Each subject becomes test subject once, 4-fold CV on remaining 49 subjects")
     
     # Check prerequisites
     print(f"\n🔍 Checking prerequisites...")
@@ -266,30 +288,33 @@ def main():
     
     print(f"\nTotal combinations: {len(combinations)}")
     
-    # Estimate time based on model type
-    dcn_count = len([c for c in combinations if c['script'] == 'dcn'])
-    msn_count = len([c for c in combinations if c['script'] == 'msn'])
-    dsn_count = len([c for c in combinations if c['script'] == 'dsn'])
+    # Estimate time based on model type (LOSO takes much longer!)
+    dcn_count = len([c for c in combinations if c['script'] == 'dcn_indep'])
+    msn_count = len([c for c in combinations if c['script'] == 'msn_indep'])
+    dsn_count = len([c for c in combinations if c['script'] == 'dsn_indep'])
     
-    estimated_time = (dcn_count * 60) + (msn_count * 90) + (dsn_count * 120)  # minutes
+    # LOSO training times: DCN/MSN train full models, DSN just combines features
+    estimated_time = (dcn_count * 3000) + (msn_count * 4500) + (dsn_count * 500)  # minutes
     print(f"Estimated time: ~{estimated_time} minutes ({estimated_time/60:.1f} hours)")
-    print(f"  - DCN: {dcn_count} models × ~60 min each")
-    print(f"  - MSN: {msn_count} models × ~90 min each") 
-    print(f"  - DSN: {dsn_count} models × ~120 min each")
+    print(f"  - DCN LOSO: {dcn_count} models × ~50 hours each (50 subjects × ~60 min)")
+    print(f"  - MSN LOSO: {msn_count} models × ~75 hours each (50 subjects × ~90 min)") 
+    print(f"  - DSN LOSO: {dsn_count} models × ~8 hours each (50 subjects × ~10 min)")
+    print(f"⏰ Note: DSN is much faster as it only trains classifier on pre-extracted features")
+    print(f"⏰ WARNING: LOSO training is VERY time-consuming!")
     
     # Show configuration
     if combinations:
         sample_config = combinations[0]
         print(f"\n⚙️ CONFIGURATION:")
-        if sample_config['script'] == 'dcn':
-            print("DCN Configuration (using all defaults):")
-            print("  Subjects: 50, Epochs: 100, Folds: 4, Batch size: 32, LR: 1e-3")
-            print("  Type: dependent, Save model: True")
+        if sample_config['script'] == 'dcn_indep':
+            print("DCN_INDEP Configuration (using all defaults):")
+            print("  Subjects: 50 (LOSO), Epochs: 100, Folds: 4, Batch size: 32, LR: 1e-3")
+            print("  Type: independent, Save model: True")
         else:
-            print(f"MSN/DSN Configuration:")
-            print(f"  Subjects: {sample_config['n_subjects']}")
+            print(f"MSN_INDEP/DSN_INDEP Configuration:")
+            print(f"  Subjects: {sample_config['n_subjects']} (LOSO)")
             print(f"  Epochs: {sample_config['epochs']}")
-            print(f"  Folds: {sample_config['n_folds']}")
+            print(f"  Folds: {sample_config['n_folds']} (CV on remaining 49 subjects)")
             print(f"  Batch size: {sample_config['batch_size']}")
             print(f"  Learning rate: {sample_config['lr']}")
         
@@ -297,8 +322,15 @@ def main():
             cluster_list = list(set(c['clusters'] for c in combinations if c['clusters']))
             print(f"  Cluster sizes: {cluster_list}")
     
+    # Special warning for LOSO
+    print(f"\n⚠️  IMPORTANT NOTES:")
+    print(f"  - LOSO training takes 50x longer than dependent training")
+    print(f"  - Each model trains 50 times (once per test subject)")
+    print(f"  - Results are saved after each subject for resume capability")
+    print(f"  - You can interrupt and resume training later")
+    
     # Ask for confirmation
-    response = input(f"\nProceed with training {len(combinations)} model combinations? (y/N): ")
+    response = input(f"\nProceed with LOSO training of {len(combinations)} model combinations? (y/N): ")
     if response.lower() not in ['y', 'yes']:
         print("Training cancelled.")
         return
@@ -313,10 +345,10 @@ def main():
         
         # Calculate estimated remaining time based on model types remaining
         remaining_combos = combinations[i:]
-        remaining_dcn = len([c for c in remaining_combos if c['script'] == 'dcn'])
-        remaining_msn = len([c for c in remaining_combos if c['script'] == 'msn'])
-        remaining_dsn = len([c for c in remaining_combos if c['script'] == 'dsn'])
-        remaining_time = (remaining_dcn * 60) + (remaining_msn * 90) + (remaining_dsn * 120)
+        remaining_dcn = len([c for c in remaining_combos if c['script'] == 'dcn_indep'])
+        remaining_msn = len([c for c in remaining_combos if c['script'] == 'msn_indep'])
+        remaining_dsn = len([c for c in remaining_combos if c['script'] == 'dsn_indep'])
+        remaining_time = (remaining_dcn * 3000) + (remaining_msn * 4500) + (remaining_dsn * 500)
         
         print(f"⏰ Estimated remaining: {remaining_time:.0f} minutes ({remaining_time/60:.1f} hours)")
         
