@@ -166,50 +166,83 @@ class FeatureExtractor(nn.Module):
             def __init__(self, original_model):
                 super().__init__()
                 self.microstate_embedding = original_model.microstate_embedding
-                self.positional_embedding = original_model.positional_embedding
-                self.branch1 = original_model.branch1
-                self.branch2 = original_model.branch2
-                self.branch3 = original_model.branch3
-                self.branch4 = original_model.branch4
+                # Check if model has positional_embedding or uses adaptive positioning
+                if hasattr(original_model, 'positional_embedding'):
+                    self.positional_embedding = original_model.positional_embedding
+                    self.use_adaptive_pos = False
+                else:
+                    self.use_adaptive_pos = True
+                    
+                # MultiScaleMicroStateNet has only 3 branches for microstate processing
+                if hasattr(original_model, 'ms_branch1'):
+                    # Embedding mode with separate microstate branches
+                    self.ms_branch1 = original_model.ms_branch1
+                    self.ms_branch2 = original_model.ms_branch2
+                    self.ms_branch3 = original_model.ms_branch3
+                    self.use_ms_branches = True
+                else:
+                    # Fallback to regular branches
+                    self.branch1 = original_model.branch1
+                    self.branch2 = original_model.branch2
+                    self.branch3 = original_model.branch3
+                    self.use_ms_branches = False
                 
             def forward(self, x):
                 # Embedding path
-                x = self.microstate_embedding(x)
-                x = x + self.positional_embedding.unsqueeze(0)
-                x = x.transpose(1, 2)
+                embedded = self.microstate_embedding(x)
+                
+                if self.use_adaptive_pos:
+                    # Create adaptive positional encoding (like in your model)
+                    seq_len = embedded.shape[1]
+                    embedding_dim = embedded.shape[2]
+                    pos_emb = torch.arange(seq_len, device=embedded.device).float().unsqueeze(0).unsqueeze(-1)
+                    pos_emb = pos_emb / seq_len  # Normalize to [0, 1]
+                    pos_emb = pos_emb.expand(embedded.shape[0], seq_len, embedding_dim)
+                    embedded = embedded + pos_emb * 0.1
+                else:
+                    # Use fixed positional embedding
+                    embedded = embedded + self.positional_embedding.unsqueeze(0)
+                
+                # Transpose for conv1d: (batch, embedding_dim, seq_len)
+                x = embedded.transpose(1, 2)
                 
                 # Process each branch (stop before classification)
-                x1 = self.branch1(x).squeeze(-1)  # (batch_size, 256)
-                x2 = self.branch2(x).squeeze(-1)  # (batch_size, 256)
-                x3 = self.branch3(x).squeeze(-1)  # (batch_size, 256)
-                x4 = self.branch4(x).squeeze(-1)  # (batch_size, 256)
+                if self.use_ms_branches:
+                    x1 = self.ms_branch1(x).squeeze(-1)  # (batch_size, 128)
+                    x2 = self.ms_branch2(x).squeeze(-1)  # (batch_size, 128)
+                    x3 = self.ms_branch3(x).squeeze(-1)  # (batch_size, 128)
+                else:
+                    x1 = self.branch1(x).squeeze(-1)  # (batch_size, 128)
+                    x2 = self.branch2(x).squeeze(-1)  # (batch_size, 128)
+                    x3 = self.branch3(x).squeeze(-1)  # (batch_size, 128)
                 
-                # Concatenate features from all branches
-                features = torch.cat([x1, x2, x3, x4], dim=1)  # (batch_size, 1024)
+                # Concatenate features from all 3 branches (not 4!)
+                features = torch.cat([x1, x2, x3], dim=1)  # (batch_size, 384)
                 return features
                 
         return EmbeddingMultiScaleFeatureExtractor(self.backbone)
-    
+
     def _create_multiscale_feature_extractor(self):
         """Create feature extractor for MultiScaleMicroStateNet with one-hot input"""
         class MultiScaleFeatureExtractor(nn.Module):
             def __init__(self, original_model):
                 super().__init__()
+                # MultiScaleMicroStateNet has only 3 branches, not 4!
                 self.branch1 = original_model.branch1
                 self.branch2 = original_model.branch2
                 self.branch3 = original_model.branch3
-                self.branch4 = original_model.branch4
+                # No branch4 - it doesn't exist in your model!
                 
             def forward(self, x):
                 # One-hot input path (no embedding)
                 # Process each branch (stop before classification)
-                x1 = self.branch1(x).squeeze(-1)  # (batch_size, 256)
-                x2 = self.branch2(x).squeeze(-1)  # (batch_size, 256)
-                x3 = self.branch3(x).squeeze(-1)  # (batch_size, 256)
-                x4 = self.branch4(x).squeeze(-1)  # (batch_size, 256)
+                x1 = self.branch1(x).squeeze(-1)  # (batch_size, 128)
+                x2 = self.branch2(x).squeeze(-1)  # (batch_size, 128)
+                x3 = self.branch3(x).squeeze(-1)  # (batch_size, 128)
+                # No x4 - only 3 branches!
                 
-                # Concatenate features from all branches
-                features = torch.cat([x1, x2, x3, x4], dim=1)  # (batch_size, 1024)
+                # Concatenate features from all 3 branches (not 4!)
+                features = torch.cat([x1, x2, x3], dim=1)  # (batch_size, 384)
                 return features
                 
         return MultiScaleFeatureExtractor(self.backbone)
