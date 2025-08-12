@@ -160,67 +160,106 @@ class FeatureExtractor(nn.Module):
                 
         return MicroStateNetFeatureExtractor(self.backbone)
     
-    def _create_embedding_multiscale_feature_extractor(self):
-        """Create feature extractor for MultiScaleMicroStateNet with embedding"""
-        class EmbeddingMultiScaleFeatureExtractor(nn.Module):
+    def _create_embedding_microstatenet_feature_extractor(self):
+        """Create feature extractor for MicroStateNet with embedding"""
+        class EmbeddingMicroStateNetFeatureExtractor(nn.Module):
             def __init__(self, original_model):
                 super().__init__()
                 self.microstate_embedding = original_model.microstate_embedding
-                # Check if model has positional_embedding or uses adaptive positioning
-                if hasattr(original_model, 'positional_embedding'):
-                    self.positional_embedding = original_model.positional_embedding
-                    self.use_adaptive_pos = False
+                # MicroStateNet uses adaptive positional encoding, not fixed positional_embedding
+                self.embedding_dim = original_model.embedding_dim
+                
+                # Check which branch structure the model uses
+                if hasattr(original_model, 'ms_conv1'):
+                    # Embedding mode with ms_conv layers
+                    self.ms_conv1 = original_model.ms_conv1
+                    self.ms_bn1 = original_model.ms_bn1
+                    self.ms_dropout1 = original_model.ms_dropout1
+                    self.ms_conv2 = original_model.ms_conv2
+                    self.ms_bn2 = original_model.ms_bn2
+                    self.ms_dropout2 = original_model.ms_dropout2
+                    self.ms_conv3 = original_model.ms_conv3
+                    self.ms_bn3 = original_model.ms_bn3
+                    self.ms_dropout3 = original_model.ms_dropout3
+                    self.ms_conv4 = original_model.ms_conv4
+                    self.ms_bn4 = original_model.ms_bn4
+                    self.ms_dropout4 = original_model.ms_dropout4
+                    self.ms_global_pool = original_model.ms_global_pool
+                    self.use_ms_layers = True
                 else:
-                    self.use_adaptive_pos = True
+                    # Fallback to regular conv layers (if they exist)
+                    self.conv1 = original_model.conv1
+                    self.bn1 = original_model.bn1
+                    self.dropout1 = original_model.dropout1
+                    self.conv2 = original_model.conv2
+                    self.bn2 = original_model.bn2
+                    self.dropout2 = original_model.dropout2
+                    self.conv3 = original_model.conv3
+                    self.bn3 = original_model.bn3
+                    self.dropout3 = original_model.dropout3
+                    self.conv4 = original_model.conv4
+                    self.bn4 = original_model.bn4
+                    self.dropout4 = original_model.dropout4
+                    self.global_pool = original_model.global_pool
+                    self.use_ms_layers = False
                     
-                # MultiScaleMicroStateNet has only 3 branches for microstate processing
-                if hasattr(original_model, 'ms_branch1'):
-                    # Embedding mode with separate microstate branches
-                    self.ms_branch1 = original_model.ms_branch1
-                    self.ms_branch2 = original_model.ms_branch2
-                    self.ms_branch3 = original_model.ms_branch3
-                    self.use_ms_branches = True
-                else:
-                    # Fallback to regular branches
-                    self.branch1 = original_model.branch1
-                    self.branch2 = original_model.branch2
-                    self.branch3 = original_model.branch3
-                    self.use_ms_branches = False
-                
             def forward(self, x):
-                # Embedding path
-                embedded = self.microstate_embedding(x)
+                # Embedding path with adaptive positional encoding
+                embedded = self.microstate_embedding(x)  # (batch, seq_len, embedding_dim)
                 
-                if self.use_adaptive_pos:
-                    # Create adaptive positional encoding (like in your model)
-                    seq_len = embedded.shape[1]
-                    embedding_dim = embedded.shape[2]
-                    pos_emb = torch.arange(seq_len, device=embedded.device).float().unsqueeze(0).unsqueeze(-1)
-                    pos_emb = pos_emb / seq_len  # Normalize to [0, 1]
-                    pos_emb = pos_emb.expand(embedded.shape[0], seq_len, embedding_dim)
-                    embedded = embedded + pos_emb * 0.1
-                else:
-                    # Use fixed positional embedding
-                    embedded = embedded + self.positional_embedding.unsqueeze(0)
+                # Create adaptive positional encoding (matches your MicroStateNet)
+                seq_len = embedded.shape[1]
+                pos_emb = torch.arange(seq_len, device=embedded.device).float().unsqueeze(0).unsqueeze(-1)
+                pos_emb = pos_emb / seq_len  # Normalize to [0, 1]
+                pos_emb = pos_emb.expand(embedded.shape[0], seq_len, self.embedding_dim)
+                embedded = embedded + pos_emb * 0.1  # Add positional information
                 
-                # Transpose for conv1d: (batch, embedding_dim, seq_len)
+                # Transpose for Conv1d: (batch_size, embedding_dim, sequence_length)
                 x = embedded.transpose(1, 2)
                 
-                # Process each branch (stop before classification)
-                if self.use_ms_branches:
-                    x1 = self.ms_branch1(x).squeeze(-1)  # (batch_size, 128)
-                    x2 = self.ms_branch2(x).squeeze(-1)  # (batch_size, 128)
-                    x3 = self.ms_branch3(x).squeeze(-1)  # (batch_size, 128)
+                # Conv layers
+                if self.use_ms_layers:
+                    x = F.relu(self.ms_bn1(self.ms_conv1(x)))
+                    x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+                    x = self.ms_dropout1(x)
+                    
+                    x = F.relu(self.ms_bn2(self.ms_conv2(x)))
+                    x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+                    x = self.ms_dropout2(x)
+                    
+                    x = F.relu(self.ms_bn3(self.ms_conv3(x)))
+                    x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+                    x = self.ms_dropout3(x)
+                    
+                    x = F.relu(self.ms_bn4(self.ms_conv4(x)))
+                    x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+                    x = self.ms_dropout4(x)
+                    
+                    # Global pooling to get features
+                    x = self.ms_global_pool(x).squeeze(-1)
                 else:
-                    x1 = self.branch1(x).squeeze(-1)  # (batch_size, 128)
-                    x2 = self.branch2(x).squeeze(-1)  # (batch_size, 128)
-                    x3 = self.branch3(x).squeeze(-1)  # (batch_size, 128)
+                    x = F.relu(self.bn1(self.conv1(x)))
+                    x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+                    x = self.dropout1(x)
+                    
+                    x = F.relu(self.bn2(self.conv2(x)))
+                    x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+                    x = self.dropout2(x)
+                    
+                    x = F.relu(self.bn3(self.conv3(x)))
+                    x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+                    x = self.dropout3(x)
+                    
+                    x = F.relu(self.bn4(self.conv4(x)))
+                    x = F.max_pool1d(x, kernel_size=3, stride=2, padding=1)
+                    x = self.dropout4(x)
+                    
+                    # Global pooling to get features
+                    x = self.global_pool(x).squeeze(-1)
                 
-                # Concatenate features from all 3 branches (not 4!)
-                features = torch.cat([x1, x2, x3], dim=1)  # (batch_size, 384)
-                return features
+                return x
                 
-        return EmbeddingMultiScaleFeatureExtractor(self.backbone)
+        return EmbeddingMicroStateNetFeatureExtractor(self.backbone)
 
     def _create_multiscale_feature_extractor(self):
         """Create feature extractor for MultiScaleMicroStateNet with one-hot input"""
