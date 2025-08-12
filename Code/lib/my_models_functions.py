@@ -430,6 +430,8 @@ def train_subject(subject_id, args, device, data_path, model_type='dcn'):
     
     y = torch.tensor(y, dtype=torch.long)
     
+    mf.print_memory_status(f"After Loading Subject {subject_id}")
+
     print(f"Subject {subject_id} data prepared")
     print(f"Number of classes: {len(torch.unique(y))}")
     
@@ -614,6 +616,9 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
     
     print(f"Test subject {test_subject_id} loaded")
     
+    mf.print_memory_status(f"After Loading Test Subject {test_subject_id}")
+
+
     # 4-Fold Cross Validation on remaining subjects
     dummy_y = [0] * len(all_remaining_subjects)
     skf = StratifiedKFold(n_splits=args.n_folds, shuffle=True, random_state=args.seed)
@@ -778,6 +783,8 @@ def load_subjects_batch(subject_ids, args, data_path, data_loader):
         x_combined = torch.cat(x_list, dim=0)
     
     y_combined = torch.cat(y_list, dim=0)
+    
+    mf.print_memory_status(f"After Loading Batch of {len(subject_ids)} subjects")
     
     del x_list, y_list  # Free intermediate memory
     return x_combined, y_combined
