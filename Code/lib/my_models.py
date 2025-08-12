@@ -1007,52 +1007,37 @@ class MultiScaleMicroStateNet(nn.Module):
 #         return x
 
 class DeepStateNetClassifier(nn.Module):
-    """
-    Multimodal classifier that fuses features from raw EEG and microstate models
-    Used in DeepStateNet for combining DCN and MicroSNet features
-    """
-    
     def __init__(self, raw_feature_dim, ms_feature_dim, n_classes, dropout=0.5):
-        super(DeepStateNetClassifier, self).__init__()
+        super().__init__()
         
-        self.raw_feature_dim = raw_feature_dim
-        self.ms_feature_dim = ms_feature_dim
-        self.n_classes = n_classes
+        # Add feature scaling layers
+        self.raw_scaler = nn.Linear(raw_feature_dim, raw_feature_dim)
+        self.ms_scaler = nn.Linear(ms_feature_dim, ms_feature_dim)
         
-        # Feature fusion layer
         total_features = raw_feature_dim + ms_feature_dim
         
         self.classifier = nn.Sequential(
             nn.Linear(total_features, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
             nn.Dropout(dropout),
             nn.Linear(512, 256),
             nn.ReLU(),
-            nn.BatchNorm1d(256),
             nn.Dropout(dropout),
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Dropout(dropout/2),  # Reduce dropout for final layer
+            nn.Dropout(dropout/2),
             nn.Linear(128, n_classes),
-            nn.LogSoftmax(dim=1)  # For NLLLoss compatibility
+            nn.LogSoftmax(dim=1)
         )
         
     def forward(self, raw_features, ms_features):
-        """
-        Forward pass combining features from both modalities
+        # Scale features to similar ranges
+        raw_scaled = self.raw_scaler(raw_features)
+        ms_scaled = self.ms_scaler(ms_features)
         
-        Args:
-            raw_features: Features from raw EEG model (batch_size, raw_feature_dim)
-            ms_features: Features from microstate model (batch_size, ms_feature_dim)
-            
-        Returns:
-            Classification logits (batch_size, n_classes)
-        """
-        # Concatenate features from both modalities
-        combined_features = torch.cat([raw_features, ms_features], dim=1)
+        combined_features = torch.cat([raw_scaled, ms_scaled], dim=1)
         return self.classifier(combined_features)
-
+    
 
 # ============== TRANSFORMER-ENHANCED MODELS ==============
 
