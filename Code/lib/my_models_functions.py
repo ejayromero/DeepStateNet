@@ -1104,36 +1104,86 @@ def plot_cv_results(all_results, output_path, type_of_subject, model_name, n_sub
 
 
 def plot_training_curves(all_results, output_path, type_of_subject, model_name):
-    """Plot aggregated training curves (mean across subjects and folds)"""
+    """Plot aggregated training curves (mean across subjects and folds) with early stopping support"""
     if len(all_results) == 0:
         return
     
     # Use colorblind-friendly colors
     colors = sns.color_palette("colorblind")
-        
-    num_epochs = len(all_results[0]['train_losses_mean'])
+    
+    # Find the maximum number of epochs across all subjects
+    max_epochs = 0
+    for result in all_results:
+        if 'train_balanced_accuracies_mean' in result and len(result['train_balanced_accuracies_mean']) > 0:
+            max_epochs = max(max_epochs, len(result['train_balanced_accuracies_mean']))
+    
+    if max_epochs == 0:
+        print("Warning: No training curves found to plot")
+        return
+    
+    print(f"Plotting training curves: max epochs across subjects = {max_epochs}")
+    
+    # Helper function to pad curves to the same length
+    def pad_curve_to_length(curve, target_length):
+        """Pad a curve to target length by repeating the last value"""
+        if len(curve) == 0:
+            return [0.0] * target_length
+        elif len(curve) >= target_length:
+            return curve[:target_length]
+        else:
+            # Pad with the last value (plateau effect after early stopping)
+            last_value = curve[-1]
+            return curve + [last_value] * (target_length - len(curve))
+    
+    # Collect and pad all curves to the same length
+    padded_train_bal_accs = []
+    padded_val_bal_accs = []
+    padded_train_f1s = []
+    padded_val_f1s = []
+    padded_train_losses = []
+    padded_val_losses = []
+    
+    valid_subjects = 0
+    for result in all_results:
+        # Check if this result has training curves
+        if ('train_balanced_accuracies_mean' in result and 
+            len(result['train_balanced_accuracies_mean']) > 0):
+            
+            padded_train_bal_accs.append(pad_curve_to_length(result['train_balanced_accuracies_mean'], max_epochs))
+            padded_val_bal_accs.append(pad_curve_to_length(result['val_balanced_accuracies_mean'], max_epochs))
+            padded_train_f1s.append(pad_curve_to_length(result['train_f1_macros_mean'], max_epochs))
+            padded_val_f1s.append(pad_curve_to_length(result['val_f1_macros_mean'], max_epochs))
+            padded_train_losses.append(pad_curve_to_length(result['train_losses_mean'], max_epochs))
+            padded_val_losses.append(pad_curve_to_length(result['val_losses_mean'], max_epochs))
+            valid_subjects += 1
+    
+    if valid_subjects == 0:
+        print("Warning: No valid training curves found to plot")
+        return
+    
+    print(f"Successfully padded curves for {valid_subjects} subjects")
     
     # Calculate mean and std across subjects
-    train_bal_accs_mean = np.mean([result['train_balanced_accuracies_mean'] for result in all_results], axis=0)
-    train_bal_accs_std = np.std([result['train_balanced_accuracies_mean'] for result in all_results], axis=0)
-    val_bal_accs_mean = np.mean([result['val_balanced_accuracies_mean'] for result in all_results], axis=0)
-    val_bal_accs_std = np.std([result['val_balanced_accuracies_mean'] for result in all_results], axis=0)
+    train_bal_accs_mean = np.mean(padded_train_bal_accs, axis=0)
+    train_bal_accs_std = np.std(padded_train_bal_accs, axis=0)
+    val_bal_accs_mean = np.mean(padded_val_bal_accs, axis=0)
+    val_bal_accs_std = np.std(padded_val_bal_accs, axis=0)
     
-    train_f1s_mean = np.mean([result['train_f1_macros_mean'] for result in all_results], axis=0)
-    train_f1s_std = np.std([result['train_f1_macros_mean'] for result in all_results], axis=0)
-    val_f1s_mean = np.mean([result['val_f1_macros_mean'] for result in all_results], axis=0)
-    val_f1s_std = np.std([result['val_f1_macros_mean'] for result in all_results], axis=0)
+    train_f1s_mean = np.mean(padded_train_f1s, axis=0)
+    train_f1s_std = np.std(padded_train_f1s, axis=0)
+    val_f1s_mean = np.mean(padded_val_f1s, axis=0)
+    val_f1s_std = np.std(padded_val_f1s, axis=0)
     
-    train_losses_mean = np.mean([result['train_losses_mean'] for result in all_results], axis=0)
-    train_losses_std = np.std([result['train_losses_mean'] for result in all_results], axis=0)
-    val_losses_mean = np.mean([result['val_losses_mean'] for result in all_results], axis=0)
-    val_losses_std = np.std([result['val_losses_mean'] for result in all_results], axis=0)
+    train_losses_mean = np.mean(padded_train_losses, axis=0)
+    train_losses_std = np.std(padded_train_losses, axis=0)
+    val_losses_mean = np.mean(padded_val_losses, axis=0)
+    val_losses_std = np.std(padded_val_losses, axis=0)
     
-    epochs = np.arange(1, num_epochs + 1)
+    epochs = np.arange(1, max_epochs + 1)
     
     # Plot training curves
     fig, axes = plt.subplots(3, 2, figsize=(16, 14))
-    fig.suptitle(f'{type_of_subject.title()} {model_name.upper()} - Training Curves (Mean ± STD across subjects and CV folds)', fontsize=16, y=0.98)
+    fig.suptitle(f'{type_of_subject.title()} {model_name.upper()} - Training Curves (Mean ± STD across {valid_subjects} subjects and CV folds)', fontsize=16, y=0.98)
     
     # Balanced Accuracy
     axes[0, 0].plot(epochs, train_bal_accs_mean, color=colors[0], linewidth=2, label='Train')
@@ -1142,6 +1192,7 @@ def plot_training_curves(all_results, output_path, type_of_subject, model_name):
     axes[0, 0].set_title('Training Balanced Accuracy')
     axes[0, 0].set_ylabel('Balanced Accuracy (%)')
     axes[0, 0].set_ylim(0, 102)
+    axes[0, 0].grid(True, alpha=0.3)
     
     axes[0, 1].plot(epochs, val_bal_accs_mean, color=colors[1], linewidth=2, label='Validation')
     axes[0, 1].fill_between(epochs, val_bal_accs_mean - val_bal_accs_std, 
@@ -1149,6 +1200,7 @@ def plot_training_curves(all_results, output_path, type_of_subject, model_name):
     axes[0, 1].set_title('Validation Balanced Accuracy (CV)')
     axes[0, 1].set_ylabel('Balanced Accuracy (%)')
     axes[0, 1].set_ylim(0, 102)
+    axes[0, 1].grid(True, alpha=0.3)
     
     # F1 Macro
     axes[1, 0].plot(epochs, train_f1s_mean, color=colors[2], linewidth=2, label='Train F1')
@@ -1157,6 +1209,7 @@ def plot_training_curves(all_results, output_path, type_of_subject, model_name):
     axes[1, 0].set_title('Training F1 Macro')
     axes[1, 0].set_ylabel('F1 Macro (%)')
     axes[1, 0].set_ylim(0, 102)
+    axes[1, 0].grid(True, alpha=0.3)
     
     axes[1, 1].plot(epochs, val_f1s_mean, color=colors[3], linewidth=2, label='Val F1')
     axes[1, 1].fill_between(epochs, val_f1s_mean - val_f1s_std, 
@@ -1164,6 +1217,7 @@ def plot_training_curves(all_results, output_path, type_of_subject, model_name):
     axes[1, 1].set_title('Validation F1 Macro (CV)')
     axes[1, 1].set_ylabel('F1 Macro (%)')
     axes[1, 1].set_ylim(0, 102)
+    axes[1, 1].grid(True, alpha=0.3)
     
     # Loss - with shared y-axis for better comparison
     loss_min = min(np.min(train_losses_mean), np.min(val_losses_mean))
@@ -1175,7 +1229,8 @@ def plot_training_curves(all_results, output_path, type_of_subject, model_name):
     axes[2, 0].set_title('Training Loss')
     axes[2, 0].set_ylabel('Loss')
     axes[2, 0].set_xlabel('Epoch')
-    axes[2, 0].set_ylim(loss_min * 0.9, loss_max * 1.5)
+    axes[2, 0].set_ylim(loss_min * 0.9, loss_max * 1.1)
+    axes[2, 0].grid(True, alpha=0.3)
     
     axes[2, 1].plot(epochs, val_losses_mean, color=colors[5], linewidth=2, label='Val Loss')
     axes[2, 1].fill_between(epochs, val_losses_mean - val_losses_std, 
@@ -1183,11 +1238,19 @@ def plot_training_curves(all_results, output_path, type_of_subject, model_name):
     axes[2, 1].set_title('Validation Loss (CV)')
     axes[2, 1].set_ylabel('Loss')
     axes[2, 1].set_xlabel('Epoch')
-    axes[2, 1].set_ylim(loss_min * 0.9, loss_max * 1.5)
+    axes[2, 1].set_ylim(loss_min * 0.9, loss_max * 1.1)
+    axes[2, 1].grid(True, alpha=0.3)
+    
+    # Add early stopping annotation
+    fig.text(0.02, 0.02, f'Note: Curves show plateau effect after early stopping (avg. best epoch varies per subject)', 
+             fontsize=10, style='italic', alpha=0.7)
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_path, f'{type_of_subject}_{model_name}_CV_training_curves.png'), dpi=300, bbox_inches='tight')
     plt.close()
+    
+    print(f"Training curves plot saved successfully")
+    print(f"Plotted {valid_subjects} subjects with max {max_epochs} epochs")
 
 
 def plot_confusion_matrix(all_results, output_path, type_of_subject, model_name):
