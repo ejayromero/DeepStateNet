@@ -53,7 +53,7 @@ def main():
     parser.add_argument('--n-clusters', type=int, default=5, metavar='N',
                         help='number of microstate clusters (default: 5)')
     parser.add_argument('--ms-file-specific', type=str, default='harmonize_overall',
-                        choices=['indiv', 'harmonize_overall'],
+                        choices=['indiv', 'harmonize_overall', 'overall'],
                         help='microstate file specific type (default: harmonize_overall)')
     parser.add_argument('--dropout', type=float, default=0.25, metavar='D',
                         help='dropout rate (default: 0.25)')
@@ -106,6 +106,33 @@ def main():
     print(f"Using model: {args.model_name} with embedding: {args.use_embedding}")
     if args.model_name in mm.MODEL_INFO:
         print(f"Model description: {mm.MODEL_INFO[args.model_name]['description']}")
+
+    if args.use_embedding:
+        print("🚀 Embedding mode detected - performing vocabulary scan...")
+        
+        # Create data loader for scanning
+        data_loader = mmf.MicrostateDataLoader()
+        
+        # Scan all subjects to find max microstate index
+        max_microstate_index, actual_vocab_size = mmf.scan_all_subjects_for_max_microstate(
+            args, data_path, data_loader
+        )
+        
+        # Store the actual vocabulary size in args for model creation
+        args.actual_vocab_size = actual_vocab_size
+        
+        # Memory cleanup after scanning
+        del data_loader
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        mf.print_memory_status("After vocabulary scan")
+        
+    else:
+        print("One-hot mode - no vocabulary scan needed")
+        args.actual_vocab_size = args.n_clusters  # Use original parameter
 
     # LOSO Training loop - using unified mmf function
     all_results = []

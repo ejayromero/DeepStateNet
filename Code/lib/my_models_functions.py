@@ -347,11 +347,19 @@ class ModelFactory:
         """Create microstate model"""
         n_classes = 3  # rest, open, close
         
+        # Use the scanned vocabulary size if available (for embedding models)
+        if args.use_embedding and hasattr(args, 'actual_vocab_size'):
+            vocab_size = args.actual_vocab_size
+            print(f"Using scanned vocabulary size: {vocab_size}")
+        else:
+            vocab_size = data_info['n_microstates']
+            print(f"Using data_info vocabulary size: {vocab_size}")
+        
         # Create model using factory function
         if 'attention' in args.model_name:
             model = mm.get_model(
                 model_name=args.model_name,
-                n_microstates=data_info['n_microstates'],
+                n_microstates=vocab_size,  # Use actual vocab size
                 n_classes=n_classes,
                 sequence_length=data_info['sequence_length'],
                 dropout=args.dropout,
@@ -363,7 +371,7 @@ class ModelFactory:
         else:
             model = mm.get_model(
                 model_name=args.model_name,
-                n_microstates=data_info['n_microstates'],
+                n_microstates=vocab_size,  # Use actual vocab size
                 n_classes=n_classes,
                 sequence_length=data_info['sequence_length'],
                 dropout=args.dropout,
@@ -1477,3 +1485,145 @@ def load_pretrained_models(args, project_root):
         'dcn': dcn_models,
         'ms': ms_models
     }
+
+def scan_all_subjects_for_max_microstate(args, data_path, data_loader):
+    """
+    Enhanced scan with detailed debugging to catch all edge cases
+    """
+    print("🔍 Scanning all subjects to determine vocabulary size...")
+    print(f"Scanning range: subjects 0 to {args.n_subjects-1} (total: {args.n_subjects})")
+    
+    max_microstate_index = -1
+    microstate_stats = {
+        'total_samples': 0,
+        'unique_indices': set(),
+        'min_index': float('inf'),
+        'subjects_scanned': 0,
+        'subjects_failed': 0,
+        'all_indices': [],  # Store ALL indices for verification
+        'subject_details': {}
+    }
+    
+    # Scan all subjects
+    for subject_id in range(args.n_subjects):
+        try:
+            print(f"  📁 Loading subject {subject_id}...")
+            
+            # Load subject data (only microstate data, not labels)
+            data, _ = data_loader.load_subject_data(subject_id, args, data_path)
+            
+            # Handle dual-channel data (microstate + GFP)
+            if isinstance(data, tuple):
+                microstate_data = data[0]
+                print(f"    Dual-channel data detected, using microstate channel")
+            else:
+                microstate_data = data
+                print(f"    Single-channel data")
+            
+            print(f"    Raw data shape: {microstate_data.shape}")
+            print(f"    Raw data type: {type(microstate_data)}")
+            
+            # Convert to tensor and find unique indices
+            if not isinstance(microstate_data, torch.Tensor):
+                microstate_tensor = torch.tensor(microstate_data, dtype=torch.long)
+            else:
+                microstate_tensor = microstate_data.long()
+            
+            print(f"    Tensor shape: {microstate_tensor.shape}")
+            print(f"    Tensor dtype: {microstate_tensor.dtype}")
+            
+            # CRITICAL: Apply the same preprocessing as during training
+            # This ensures we scan the data exactly as it will be used
+            processed_tensor = data_loader.prepare_input(microstate_data, args)
+            if isinstance(processed_tensor, torch.Tensor):
+                microstate_tensor = processed_tensor.long()
+                print(f"    After prepare_input: shape={microstate_tensor.shape}, dtype={microstate_tensor.dtype}")
+            
+            # Get statistics for this subject
+            unique_indices = torch.unique(microstate_tensor)
+            subject_max = torch.max(unique_indices).item()
+            subject_min = torch.min(unique_indices).item()
+            subject_unique_list = unique_indices.cpu().numpy().tolist()
+            
+            # Store detailed subject info
+            microstate_stats['subject_details'][subject_id] = {
+                'min': subject_min,
+                'max': subject_max,
+                'unique_count': len(unique_indices),
+                'unique_values': subject_unique_list,
+                'total_samples': microstate_tensor.numel()
+            }
+            
+            # Update global statistics
+            max_microstate_index = max(max_microstate_index, subject_max)
+            microstate_stats['min_index'] = min(microstate_stats['min_index'], subject_min)
+            microstate_stats['unique_indices'].update(subject_unique_list)
+            microstate_stats['total_samples'] += microstate_tensor.numel()
+            microstate_stats['subjects_scanned'] += 1
+            
+            # Store a sample of actual indices for verification
+            sample_indices = microstate_tensor.flatten()[:1000].cpu().numpy().tolist()
+            microstate_stats['all_indices'].extend(sample_indices)
+            
+            print(f"    ✅ Subject {subject_id:2d}: indices [{subject_min:3d}, {subject_max:3d}] "
+                  f"({len(unique_indices):2d} unique, {microstate_tensor.numel():,} total)")
+            
+            # Clean up memory immediately
+            del data, microstate_data, microstate_tensor, unique_indices
+            
+        except Exception as e:
+            microstate_stats['subjects_failed'] += 1
+            print(f"    ❌ Error scanning subject {subject_id}: {e}")
+            import traceback
+            print(f"    Error details: {traceback.format_exc()}")
+            continue
+    
+    # Add generous safety buffer
+    safety_buffer = 20  # Increased buffer
+    actual_vocab_size = max_microstate_index + 1 + safety_buffer
+    
+    # Print comprehensive statistics
+    print(f"\n📊 Detailed Vocabulary Scan Results:")
+    print(f"  Subjects successfully scanned: {microstate_stats['subjects_scanned']}/{args.n_subjects}")
+    print(f"  Subjects failed: {microstate_stats['subjects_failed']}/{args.n_subjects}")
+    print(f"  Total samples processed: {microstate_stats['total_samples']:,}")
+    print(f"  Global index range: [{microstate_stats['min_index']}, {max_microstate_index}]")
+    print(f"  Total unique indices found: {len(microstate_stats['unique_indices'])}")
+    print(f"  Safety buffer: +{safety_buffer}")
+    print(f"  Final vocabulary size: {actual_vocab_size}")
+    
+    # Show the complete range of unique indices found
+    all_unique = sorted(list(microstate_stats['unique_indices']))
+    print(f"\n🔍 All unique indices found: {all_unique}")
+    
+    # Show subjects with extreme indices
+    sorted_subjects = sorted(
+        [(sid, info) for sid, info in microstate_stats['subject_details'].items()], 
+        key=lambda x: x[1]['max'], 
+        reverse=True
+    )
+    
+    print(f"\n🔝 Subjects with highest indices:")
+    for i, (subject_id, info) in enumerate(sorted_subjects[:5]):
+        print(f"    {i+1}. Subject {subject_id}: range=[{info['min']}, {info['max']}], "
+              f"unique={info['unique_count']}, samples={info['total_samples']:,}")
+    
+    print(f"\n🔻 Subjects with lowest indices:")
+    for i, (subject_id, info) in enumerate(sorted(sorted_subjects, key=lambda x: x[1]['min'])[:5]):
+        print(f"    {i+1}. Subject {subject_id}: range=[{info['min']}, {info['max']}], "
+              f"unique={info['unique_count']}, samples={info['total_samples']:,}")
+    
+    # Validation
+    if max_microstate_index < 0:
+        raise ValueError("No valid microstate indices found!")
+    
+    if microstate_stats['subjects_scanned'] < args.n_subjects * 0.8:
+        print(f"  ⚠️  Warning: Only {microstate_stats['subjects_scanned']}/{args.n_subjects} subjects scanned successfully")
+    
+    if actual_vocab_size > 1000:
+        print(f"  ⚠️  Very large vocabulary size ({actual_vocab_size})")
+    
+    print(f"✅ Enhanced vocabulary scan complete. Using vocab_size={actual_vocab_size}")
+    print(f"   This should handle ALL indices from {microstate_stats['min_index']} to {max_microstate_index + safety_buffer}\n")
+    
+    return max_microstate_index, actual_vocab_size
