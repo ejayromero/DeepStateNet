@@ -387,9 +387,14 @@ class ModelFactory:
     @staticmethod
     def _create_fusion_model(data_info, args, device):
         """Create fusion model for dual modal data"""
-        raw_feature_dim = 256  # Typical DCN feature dimension
-        ms_feature_dim = 128   # Typical microstate feature dimension
+        raw_feature_dim = data_info.get('raw_feature_dim', 256)  # Default DCN feature dimension
+        ms_feature_dim = data_info.get('ms_feature_dim', 128)    # Default microstate feature dimension
         n_classes = 3
+        
+        print(f"Creating fusion model:")
+        print(f"  Raw feature dim: {raw_feature_dim}")
+        print(f"  MS feature dim: {ms_feature_dim}")
+        print(f"  Output classes: {n_classes}")
         
         model = mm.DeepStateNetClassifier(
             raw_feature_dim, ms_feature_dim, n_classes
@@ -585,7 +590,6 @@ def train_subject(subject_id, args, device, data_path, model_type='dcn'):
         **training_curves
     }
 
-
 def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
     """
     Unified LOSO training function for any model type with early stopping
@@ -604,27 +608,58 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
     # Get all remaining subjects (49 subjects)
     all_remaining_subjects = [i for i in range(args.n_subjects) if i != test_subject_id]
     
-    # Get appropriate data loader
-    if model_type == 'dcn':
-        data_loader = RawEEGDataLoader()
-    elif model_type == 'microstate':
-        data_loader = MicrostateDataLoader()
-    elif model_type == 'fusion':
-        data_loader = DualModalDataLoader()
-    
-    # Load test data
-    test_data, test_y = data_loader.load_subject_data(test_subject_id, args, data_path)
-    
+    # For fusion models, we need to load pretrained models and extract features
     if model_type == 'fusion':
-        test_raw_x, test_ms_x = data_loader.prepare_input(test_data, args)
-        test_x = (test_raw_x, test_ms_x)
+        print("Loading pretrained models for feature extraction...")
+        try:
+            pretrained_models = load_pretrained_models(args, os.path.dirname(os.path.dirname(data_path)))
+            print(f"✅ Successfully loaded pretrained DCN and {args.model_name} models")
+        except FileNotFoundError as e:
+            print(f"❌ Error loading pretrained models: {e}")
+            raise
+        
+        # Extract features for test subject using existing function
+        print("Extracting test subject features...")
+        raw_data_loader = RawEEGDataLoader()
+        ms_data_loader = MicrostateDataLoader()
+        
+        # Get pretrained models for test subject
+        dcn_model = pretrained_models['dcn'][test_subject_id]
+        ms_model = pretrained_models['ms'][test_subject_id]
+        
+        # Extract features
+        raw_data, test_y = raw_data_loader.load_subject_data(test_subject_id, args, data_path)
+        ms_data, _ = ms_data_loader.load_subject_data(test_subject_id, args, data_path)
+        
+        test_dcn_features = extract_features_from_model(dcn_model, raw_data, device)
+        test_ms_features = extract_features_from_model(ms_model, ms_data, device)
+        test_y = torch.tensor(test_y, dtype=torch.long)
+        
+        # Create data info for fusion model
+        data_info = {
+            'raw_feature_dim': test_dcn_features.shape[1],
+            'ms_feature_dim': test_ms_features.shape[1]
+        }
+        
+        print(f"Test subject {test_subject_id} loaded")
+        print(f"DCN features shape: {test_dcn_features.shape}")
+        print(f"MS features shape: {test_ms_features.shape}")
+        
     else:
+        # Original logic for non-fusion models
+        # Get appropriate data loader
+        if model_type == 'dcn':
+            data_loader = RawEEGDataLoader()
+        elif model_type == 'microstate':
+            data_loader = MicrostateDataLoader()
+        
+        # Load test data
+        test_data, test_y = data_loader.load_subject_data(test_subject_id, args, data_path)
         test_x = data_loader.prepare_input(test_data, args)
-    
-    test_y = torch.tensor(test_y, dtype=torch.long)
-    data_info = data_loader.get_data_info(test_data, args)
-    
-    print(f"Test subject {test_subject_id} loaded")
+        test_y = torch.tensor(test_y, dtype=torch.long)
+        data_info = data_loader.get_data_info(test_data, args)
+        
+        print(f"Test subject {test_subject_id} loaded")
     
     mf.print_memory_status(f"After Loading Test Subject {test_subject_id}")
 
@@ -643,17 +678,69 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
         fold_train_subjects = [all_remaining_subjects[i] for i in train_idx]
         fold_val_subjects = [all_remaining_subjects[i] for i in val_idx]
         
-        # Load batch data
-        train_x, train_y = load_subjects_batch(fold_train_subjects, args, data_path, data_loader)
-        val_x, val_y = load_subjects_batch(fold_val_subjects, args, data_path, data_loader)
-        
-        # Create DataLoaders
         if model_type == 'fusion':
-            train_raw_x, train_ms_x = train_x
-            val_raw_x, val_ms_x = val_x
-            train_dataset = TensorDataset(train_raw_x, train_ms_x, train_y)
-            val_dataset = TensorDataset(val_raw_x, val_ms_x, val_y)
+            # For fusion: extract features on-demand for each fold
+            print(f"    Extracting features for fold subjects...")
+            
+            # Extract features for training subjects
+            train_dcn_features_list = []
+            train_ms_features_list = []
+            train_y_list = []
+            
+            for s in fold_train_subjects:
+                # Get pretrained models for this subject
+                dcn_model = pretrained_models['dcn'][s]
+                ms_model = pretrained_models['ms'][s]
+                
+                # Load data and extract features
+                raw_data, y = raw_data_loader.load_subject_data(s, args, data_path)
+                ms_data, _ = ms_data_loader.load_subject_data(s, args, data_path)
+                
+                dcn_features = extract_features_from_model(dcn_model, raw_data, device)
+                ms_features = extract_features_from_model(ms_model, ms_data, device)
+                
+                train_dcn_features_list.append(dcn_features)
+                train_ms_features_list.append(ms_features)
+                train_y_list.append(torch.tensor(y, dtype=torch.long))
+            
+            # Extract features for validation subjects
+            val_dcn_features_list = []
+            val_ms_features_list = []
+            val_y_list = []
+            
+            for s in fold_val_subjects:
+                # Get pretrained models for this subject
+                dcn_model = pretrained_models['dcn'][s]
+                ms_model = pretrained_models['ms'][s]
+                
+                # Load data and extract features
+                raw_data, y = raw_data_loader.load_subject_data(s, args, data_path)
+                ms_data, _ = ms_data_loader.load_subject_data(s, args, data_path)
+                
+                dcn_features = extract_features_from_model(dcn_model, raw_data, device)
+                ms_features = extract_features_from_model(ms_model, ms_data, device)
+                
+                val_dcn_features_list.append(dcn_features)
+                val_ms_features_list.append(ms_features)
+                val_y_list.append(torch.tensor(y, dtype=torch.long))
+            
+            # Concatenate all features
+            train_dcn_features = torch.cat(train_dcn_features_list, dim=0)
+            train_ms_features = torch.cat(train_ms_features_list, dim=0)
+            val_dcn_features = torch.cat(val_dcn_features_list, dim=0)
+            val_ms_features = torch.cat(val_ms_features_list, dim=0)
+            train_y = torch.cat(train_y_list, dim=0)
+            val_y = torch.cat(val_y_list, dim=0)
+            
+            # Create datasets with extracted features
+            train_dataset = TensorDataset(train_dcn_features, train_ms_features, train_y)
+            val_dataset = TensorDataset(val_dcn_features, val_ms_features, val_y)
+            
         else:
+            # Original logic for non-fusion models
+            train_x, train_y = load_subjects_batch(fold_train_subjects, args, data_path, data_loader)
+            val_x, val_y = load_subjects_batch(fold_val_subjects, args, data_path, data_loader)
+            
             train_dataset = TensorDataset(train_x, train_y)
             val_dataset = TensorDataset(val_x, val_y)
         
@@ -777,7 +864,14 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
         print(f"   Training stopped at epoch {best_epoch}/{args.epochs} (saved {args.epochs - best_epoch} epochs)")
         
         # Clean up fold memory
-        del train_x, train_y, val_x, val_y, train_loader, val_loader
+        if model_type != 'fusion':  # Don't delete shared feature data for fusion
+            del train_x, train_y, val_x, val_y
+        else:
+            # Clean up fusion-specific variables
+            del train_dcn_features, train_ms_features, val_dcn_features, val_ms_features
+            del train_dcn_features_list, train_ms_features_list, val_dcn_features_list, val_ms_features_list
+            del train_y, val_y, train_y_list, val_y_list
+        del train_loader, val_loader
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     
@@ -800,7 +894,7 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
     
     # Final test
     if model_type == 'fusion':
-        test_dataset = TensorDataset(test_raw_x, test_ms_x, test_y)
+        test_dataset = TensorDataset(test_dcn_features, test_ms_features, test_y)
     else:
         test_dataset = TensorDataset(test_x, test_y)
     
@@ -812,7 +906,11 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
     training_curves = aggregate_fold_training_curves(fold_results)
     
     # Clean up memory
-    del test_x, test_y
+    if model_type != 'fusion':
+        del test_x, test_y
+    else:
+        del test_dcn_features, test_ms_features, test_y
+        del pretrained_models  # Clean up pretrained models
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
@@ -836,6 +934,7 @@ def train_loso(test_subject_id, args, device, data_path, model_type='dcn'):
         'total_epochs_saved': total_epochs_saved,
         **training_curves
     }
+
 
 # =============================================================================
 # UTILITY FUNCTIONS
