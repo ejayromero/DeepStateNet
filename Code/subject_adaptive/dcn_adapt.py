@@ -1,390 +1,181 @@
 '''
-Script to train model on 50 subjects, training DeepConvNet on Microstates timeseries
-
+Script to perform adaptive training on DeepConvNet models
+Loads pre-trained subject-independent models and fine-tunes them on individual subjects
+Uses same structure as dcn.py but with pre-trained model loading and fine-tuning
 '''
-
-print('==================== Start of script dcn_adapt.py! ===================')
-
 import os
+import sys
+import argparse
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
+import torch
+
+from sklearn.model_selection import train_test_split, StratifiedKFold
+
 sns.set_theme(style="darkgrid")
 
-import mne
-import random
-import pickle
-
-from braindecode.models import Deep4Net
-from braindecode.classifier import EEGClassifier
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.utils.data import TensorDataset, DataLoader
-
-from sklearn.model_selection import train_test_split
-
-
-
-# change directory go into Notebooks folder
-if os.path.basename(os.getcwd()) != 'Notebooks':
-    if os.path.basename(os.getcwd()) == 'lib':
-        os.chdir(os.path.join(os.getcwd(), '..', 'Notebooks'))
-    else:
-        os.chdir(os.path.join(os.getcwd(), 'Notebooks'))
-else:
-    # if already in Notebooks folder, do nothing
-    pass
-
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib import my_functions as mf
-
-# More explicit CUDA setup
-if torch.cuda.is_available():
-    device = torch.device("cuda:0")  # Specify GPU 0 explicitly
-    torch.cuda.set_device(0)
-    print(f"Using GPU: {torch.cuda.get_device_name(0)}")
-    print(f"CUDA Version: {torch.version.cuda}")
-    print(f"Available GPUs: {torch.cuda.device_count()}")
-else:
-    device = torch.device("cpu")
-    print("CUDA not available, using CPU")
-
-# Test if tensors are actually on GPU
-test_tensor = torch.randn(10, 10).to(device)
-print(f"Test tensor device: {test_tensor.device}")
-
-# ---------------------------# Parameters ---------------------------
-# excluded_from_training = [2, 12, 14, 20, 22, 23, 30, 39, 46]
-excluded_from_training = [-1] # to exclude no subjects from training
-num_epochs = 100
-type_of_subject = 'adaptive'  # 'independent' or 'adaptive'
-# ---------------------------# Load files ---------------------------
-
-data_path = '../Data/'
-output_path = '../Output/ica_rest_all/'
-do_all = False
-n_subjects = 50
-subject_list = list(range(n_subjects))
-all_data, all_y = mf.load_all_data(subjects_list=None, do_all=do_all)
+from lib import my_models_functions as mmf 
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-mf.set_seed(42)
-
-
-# ---------- Loop Through Subjects (Leave-One-Subject-Out) ----------
-# ---------- Loop Through First Subject Only ----------
-if n_subjects == 1:
-    test_subjects = [0]
-else:
-    test_subjects = list(range(n_subjects))
+def main():
+    """Main adaptive training function"""
+    # Argument parsing
+    parser = argparse.ArgumentParser(description='PyTorch DeepConvNet Adaptive Training with K-fold CV')
+    parser.add_argument('--batch-size', type=int, default=32, metavar='N',
+                        help='input batch size for training (default: 32)')
+    parser.add_argument('--epochs', type=int, default=50, metavar='N',
+                        help='number of epochs to train (default: 50)')
+    parser.add_argument('--lr', type=float, default=1e-3, metavar='LR',
+                        help='base learning rate (will be adapted) (default: 1e-3)')
+    parser.add_argument('--no-cuda', action='store_true', default=False,
+                        help='disables CUDA training')
+    parser.add_argument('--seed', type=int, default=42, metavar='S',
+                        help='random seed (default: 42)')
+    parser.add_argument('--log-interval', type=int, default=10, metavar='N',
+                        help='how many batches to wait before logging training status')
+    parser.add_argument('--n-subjects', type=int, default=50, metavar='N',
+                        help='number of subjects to process (default: 50)')
+    parser.add_argument('--type-of-subject', type=str, default='adaptive',
+                        choices=['independent', 'dependent', 'adaptive'],
+                        help='type of subject analysis (default: adaptive)')
+    parser.add_argument('--n-folds', type=int, default=4, metavar='K',
+                        help='number of CV folds (default: 4)')
+    parser.add_argument('--early-stopping-patience', type=int, default=15,
+                        help='early stopping patience (default: 15)')
+    parser.add_argument('--save-model', action='store_true', default=True,
+                        help='For Saving the current Model')
     
-output_file = os.path.join(output_path, f'{type_of_subject}_results_ica_rest_all.npy')
-
-for test_id in test_subjects:
+    args = parser.parse_args()
     
+    print(f'==================== Start of script {os.path.basename(__file__)}! ====================')
+    print(f'DeepConvNet Adaptive Training with Pre-trained Subject-Independent Models')
+    
+    # Device setup
+    use_cuda = not args.no_cuda and torch.cuda.is_available()
+    device = torch.device("cuda" if use_cuda else "cpu")
+    print(f"Using device: {device}")
+    
+    if use_cuda:
+        print(f"CUDA Version: {torch.version.cuda}")
+        print(f"Available GPUs: {torch.cuda.device_count()}")
+    
+    mf.print_memory_status("- INITIAL STARTUP")
+    
+    # Set seed
+    mf.set_seed(args.seed)
+    
+    # Setup paths
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(script_dir))
+    data_path = os.path.join(project_root, 'Data') + os.sep
+    output_folder = os.path.join(project_root, 'Output') + os.sep
+    output_path = f'{output_folder}ica_rest_all/{args.type_of_subject}/{args.type_of_subject}_dcn_{args.n_folds}fold_results/'
+    if not os.path.exists(output_path):
+        os.makedirs(output_path, exist_ok=True)
+
+    # Training loop
+    all_results = []
+    output_file = os.path.join(output_path, f'{args.type_of_subject}_dcn_{args.n_folds}fold_results.npy')
+    
+    # Check for existing results and resume if needed
     if os.path.exists(output_file):
-        results = np.load(output_file, allow_pickle=True).item()
-        all_train_accuracies = results['train_accuracies']
-        all_train_losses = results['train_losses']
-        all_test_accuracies = results['test_accuracies']
-        all_val_accuracies = results['val_accuracies']
-        all_val_losses = results['val_losses']
-        all_models = results['models']
+        print(f"Found existing results file: {output_file}")
+        existing_results = np.load(output_file, allow_pickle=True).item()
+        n_existing = len(existing_results.get('test_balanced_accuracies', []))
+        print(f"Found {n_existing} existing subjects. Resuming from subject {n_existing}...")
+        
+        # Convert existing results to our format
+        for i in range(n_existing):
+            result = {
+                'n_folds': existing_results.get('n_folds', [args.n_folds] * n_existing)[i],
+                'cv_balanced_accuracies': existing_results['cv_balanced_accuracies'][i],
+                'cv_f1_scores': existing_results['cv_f1_scores'][i],
+                'mean_cv_balanced_acc': existing_results['mean_cv_balanced_accs'][i],
+                'std_cv_balanced_acc': existing_results['std_cv_balanced_accs'][i],
+                'mean_cv_f1': existing_results['mean_cv_f1s'][i],
+                'std_cv_f1': existing_results['std_cv_f1s'][i],
+                'test_balanced_accuracy': existing_results['test_balanced_accuracies'][i],
+                'test_f1_macro': existing_results['test_f1_macros'][i],
+                'confusion_matrix': existing_results['confusion_matrices'][i],
+                'best_fold_idx': existing_results['best_fold_indices'][i],
+                'pretrained_performance': existing_results.get('pretrained_performances', [0] * n_existing)[i],
+                'improvement': existing_results.get('improvements', [0] * n_existing)[i],
+                'adaptive_lr': existing_results.get('adaptive_lrs', [args.lr] * n_existing)[i],
+                'train_losses_mean': existing_results['train_curves_mean']['train_losses_mean'][i],
+                'train_balanced_accuracies_mean': existing_results['train_curves_mean']['train_balanced_accuracies_mean'][i],
+                'train_f1_macros_mean': existing_results['train_curves_mean']['train_f1_macros_mean'][i],
+                'val_losses_mean': existing_results['train_curves_mean']['val_losses_mean'][i],
+                'val_balanced_accuracies_mean': existing_results['train_curves_mean']['val_balanced_accuracies_mean'][i],
+                'val_f1_macros_mean': existing_results['train_curves_mean']['val_f1_macros_mean'][i],
+                'best_model': existing_results['best_models'][i]
+            }
+            all_results.append(result)
+        start_subject = n_existing
     else:
-        all_train_accuracies = []
-        all_train_losses = []
-        all_test_accuracies = []
-        all_val_accuracies = []
-        all_val_losses = []
-        all_models = []
+        start_subject = 0
     
-    if len(all_train_accuracies) > test_id:
-        print(f"Skipping Subject {test_id} as it has already been processed.")
-        continue
-    print(f"\n\n==================== Subject {test_id} ====================")
-
-    mf.set_seed(42)
-    if torch.cuda.is_available():
-        print("CUDA is available. Using GPU for training.")
-        device = torch.device("cuda")
-    else:
-        print("CUDA is not available. Using CPU for training.")
-        device = torch.device("cpu")
-
-
-    # Choose validation subjects (4 random ones not equal to test_id)
-    val_candidates, val_ids = mf.get_val_ids(42, test_id, excluded_from_training)
-
-    # Remaining for training
-    train_ids = [i for i in val_candidates if i not in val_ids]
-
-    # Concatenate training data
-    x_train = torch.cat([torch.tensor(all_data[i], dtype=torch.float32).squeeze(1) for i in train_ids], dim=0)
-    y_train = torch.cat([torch.tensor(all_y[i], dtype=torch.long) for i in train_ids], dim=0)
-
-    # Concatenate validation data
-    x_val = torch.cat([torch.tensor(all_data[i], dtype=torch.float32).squeeze(1) for i in val_ids], dim=0)
-    y_val = torch.cat([torch.tensor(all_y[i], dtype=torch.long) for i in val_ids], dim=0)
-
-    # Replace the existing test subject data preparation section with this:
-
-    # Test subject - split into fine-tuning (90%) and final test (10%)
-    x_test_full = torch.tensor(all_data[test_id], dtype=torch.float32).squeeze(1)
-    y_test_full = torch.tensor(all_y[test_id], dtype=torch.long)
-
-    all_train_indices, all_test_indices = mf.load_split_indices(output_path, filename=f'{type_of_subject}_split_indices.pkl')
-    if all_train_indices is not None:
-        finetune_indices = all_train_indices[test_id]
-        final_test_indices = all_test_indices[test_id]
-        x_finetune = x_test_full[finetune_indices]
-        y_finetune = y_test_full[finetune_indices]
-        x_final_test = x_test_full[final_test_indices]
-        y_final_test = y_test_full[final_test_indices]
-    else:
-        # If indices are not available, use utility function for consistent splitting
-        print(f"Split indices not found for subject {test_id}. Using utility function to split data.")
-
-        # Use utility function for consistent splitting
-        x_finetune, y_finetune, x_final_test, y_final_test = mf.split_subject_data_consistently(
-            x_test_full, y_test_full, test_id, train_ratio=0.9, base_seed=42
-        )
-
-    # ---------- DataLoaders ----------
-    batch_size = 32
-    train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(TensorDataset(x_val, y_val), batch_size=batch_size, shuffle=False)
-    finetune_loader = DataLoader(TensorDataset(x_finetune, y_finetune), batch_size=batch_size, shuffle=True)
-    final_test_loader = DataLoader(TensorDataset(x_final_test, y_final_test), batch_size=batch_size, shuffle=False)
-
-    # ---------- Model ----------
-    base_model = Deep4Net(
-        n_chans=x_train.shape[1],
-        n_classes=len(torch.unique(y_train)),
-        input_window_samples=x_train.shape[2],
-        final_conv_length='auto'
-    )
-
-    model = EEGClassifier(
-        base_model,
-        criterion=nn.NLLLoss(),
-        optimizer=torch.optim.Adam,
-        optimizer__lr=1e-3,
-        train_split=None,
-        device=device
-    )
-
-    net = model.module.to(device)
-    criterion = nn.NLLLoss()
-    optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
-
-    # ---------- Initial Training ----------
-    train_losses, val_losses = [], []
-    train_accuracies, val_accuracies = [], []
-
-    for epoch in range(num_epochs):
-        net.train()
-        train_loss, train_correct, train_total = 0, 0, 0
-        for batch_x, batch_y in train_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-            optimizer.zero_grad()
-            outputs = net(batch_x)
-            loss = criterion(outputs, batch_y)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item() * batch_x.size(0)
-            preds = outputs.argmax(dim=1)
-            train_correct += (preds == batch_y).sum().item()
-            train_total += batch_y.size(0)
-
-        train_loss /= train_total
-        train_acc = train_correct / train_total * 100
-        train_losses.append(train_loss)
-        train_accuracies.append(train_acc)
-
-        # ---------- Validation ----------
-        net.eval()
-        val_loss, val_correct, val_total = 0, 0, 0
-        with torch.no_grad():
-            for batch_x, batch_y in val_loader:
-                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-                outputs = net(batch_x)
-                loss = criterion(outputs, batch_y)
-                val_loss += loss.item() * batch_x.size(0)
-                preds = outputs.argmax(dim=1)
-                val_correct += (preds == batch_y).sum().item()
-                val_total += batch_y.size(0)
-
-        val_loss /= val_total
-        val_acc = val_correct / val_total * 100
-        val_losses.append(val_loss)
-        val_accuracies.append(val_acc)
-
-        if (epoch + 1) % 10 == 0 or epoch == num_epochs - 1:
-            print(f"Epoch {epoch+1:02d}/{num_epochs} | "
-                f"Train Loss: {train_loss:.4f}, Acc: {train_acc:.2f}% | "
-                f"Val Loss: {val_loss:.4f}, Acc: {val_acc:.2f}%")
-
-    # ---------- Fine-tuning on Test Subject Data ----------
-    print(f"Starting fine-tuning on {len(x_finetune)} samples from test subject {test_id}...")
-
-    # Lower learning rate for fine-tuning
-    finetune_optimizer = torch.optim.Adam(net.parameters(), lr=1e-4)
-    num_finetune_epochs = 20  # Fewer epochs for fine-tuning
-
-    finetune_losses, finetune_accuracies = [], []
-
-    for epoch in range(num_finetune_epochs):
-        net.train()
-        finetune_loss, finetune_correct, finetune_total = 0, 0, 0
-        for batch_x, batch_y in finetune_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-            finetune_optimizer.zero_grad()
-            outputs = net(batch_x)
-            loss = criterion(outputs, batch_y)
-            loss.backward()
-            finetune_optimizer.step()
-            finetune_loss += loss.item() * batch_x.size(0)
-            preds = outputs.argmax(dim=1)
-            finetune_correct += (preds == batch_y).sum().item()
-            finetune_total += batch_y.size(0)
-
-        finetune_loss /= finetune_total
-        finetune_acc = finetune_correct / finetune_total * 100
-        finetune_losses.append(finetune_loss)
-        finetune_accuracies.append(finetune_acc)
-
-        if (epoch + 1) % 5 == 0 or epoch == num_finetune_epochs - 1:
-            print(f"Fine-tune Epoch {epoch+1:02d}/{num_finetune_epochs} | "
-                f"Loss: {finetune_loss:.4f}, Acc: {finetune_acc:.2f}%")
-
-    # ---------- Final Test on Remaining 10% ----------
-    net.eval()
-    final_test_correct, final_test_total = 0, 0
-    with torch.no_grad():
-        for batch_x, batch_y in final_test_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-            outputs = net(batch_x)
-            preds = outputs.argmax(dim=1)
-            final_test_correct += (preds == batch_y).sum().item()
-            final_test_total += batch_y.size(0)
-
-    final_test_acc = final_test_correct / final_test_total * 100
-    print(f"✅ Subject {test_id} Final Test Accuracy (after fine-tuning): {final_test_acc:.2f}%")
-    print(f"   Fine-tuning samples: {len(x_finetune)}, Final test samples: {len(x_final_test)}")
-
-    # ---------- Save Results ----------
-    all_train_accuracies.append(train_accuracies)
-    all_train_losses.append(train_losses)
-    all_test_accuracies.append(final_test_acc)  # This is now the final test accuracy after fine-tuning
-    all_val_accuracies.append(val_accuracies)
-    all_val_losses.append(val_losses)
-    all_models.append(model)
-
-    # Optionally save fine-tuning metrics too
-    if 'all_finetune_accuracies' not in locals():
-        all_finetune_accuracies = []
-        all_finetune_losses = []
-    all_finetune_accuracies.append(finetune_accuracies)
-    all_finetune_losses.append(finetune_losses)
-
-    results = {
-        'train_accuracies': all_train_accuracies,
-        'train_losses': all_train_losses,
-        'test_accuracies': all_test_accuracies,
-        'val_accuracies': all_val_accuracies,
-        'val_losses': all_val_losses,
-        'finetune_accuracies': all_finetune_accuracies,
-        'finetune_losses': all_finetune_losses,
-        'models': all_models
-    }
-    np.save(output_file, results)
-    print(f"Results saved to {output_file}")
-    print(f"✅ Subject {test_id} processed successfully.\n\n")
-
-# End of loop through subjects
-
-# Generate and save split indices for all subjects for future consistency
-print("Generating and saving split indices for all subjects...")
-if not os.path.exists(f'Output\ica_rest_all\{type_of_subject}_split_indices.pkl'):
-    all_train_indices = []
-    all_test_indices = []
-
-    for subject_id in range(n_subjects):
-        data_length = len(all_data[subject_id])
-        train_indices, test_indices = mf.get_consistent_split_indices(
-            data_length, subject_id, train_ratio=0.9, base_seed=42
-        )
-        all_train_indices.append(train_indices)
-        all_test_indices.append(test_indices)
-
-    # Save indices for reuse in other scripts
-    mf.save_split_indices(output_path, all_train_indices, all_test_indices, f'{type_of_subject}_split_indices.pkl')
-    print("Split indices saved for consistent reuse across scripts.")
-else:
-    print("Split indices already exist. Skipping generation.")
+    for subject_id in range(start_subject, args.n_subjects):
+        mf.print_memory_status(f"- SUBJECT {subject_id} START")
+        
+        result = mmf.train_adaptive_subject(subject_id, args, device, data_path, model_type='dcn')
+        all_results.append(result)
+        
+        # Save intermediate results
+        if args.save_model:
+            results_dict = {
+                'n_folds': [r['n_folds'] for r in all_results],
+                'cv_balanced_accuracies': [r['cv_balanced_accuracies'] for r in all_results],
+                'cv_f1_scores': [r['cv_f1_scores'] for r in all_results],
+                'mean_cv_balanced_accs': [r['mean_cv_balanced_acc'] for r in all_results],
+                'std_cv_balanced_accs': [r['std_cv_balanced_acc'] for r in all_results],
+                'mean_cv_f1s': [r['mean_cv_f1'] for r in all_results],
+                'std_cv_f1s': [r['std_cv_f1'] for r in all_results],
+                'test_balanced_accuracies': [r['test_balanced_accuracy'] for r in all_results],
+                'test_f1_macros': [r['test_f1_macro'] for r in all_results],
+                'confusion_matrices': [r['confusion_matrix'] for r in all_results],
+                'best_fold_indices': [r['best_fold_idx'] for r in all_results],
+                'pretrained_performances': [r['pretrained_performance'] for r in all_results],
+                'improvements': [r['improvement'] for r in all_results],
+                'adaptive_lrs': [r['adaptive_lr'] for r in all_results],
+                'train_curves_mean': {
+                    'train_losses_mean': [r['train_losses_mean'] for r in all_results],
+                    'train_balanced_accuracies_mean': [r['train_balanced_accuracies_mean'] for r in all_results],
+                    'train_f1_macros_mean': [r['train_f1_macros_mean'] for r in all_results],
+                    'val_losses_mean': [r['val_losses_mean'] for r in all_results],
+                    'val_balanced_accuracies_mean': [r['val_balanced_accuracies_mean'] for r in all_results],
+                    'val_f1_macros_mean': [r['val_f1_macros_mean'] for r in all_results],
+                },
+                'best_models': [r['best_model'] for r in all_results]
+            }
+            np.save(output_file, results_dict)
+            print(f"Results saved to {output_file}")
+        
+        print(f"✅ Subject {subject_id} processed successfully.\n")
+        mf.print_memory_status(f"- SUBJECT {subject_id} END")
+    
+    # Final summary - USING SHARED FUNCTION
+    mmf.print_final_summary(all_results, "DeepConvNet Adaptive", args.n_folds)
+    
+    # Print adaptive-specific summary
+    print(f"\n🔄 Adaptive Training Summary:")
+    pretrained_accs = [r['pretrained_performance'] for r in all_results]
+    improvements = [r['improvement'] for r in all_results]
+    adaptive_lrs = [r['adaptive_lr'] for r in all_results]
+    
+    print(f"Pre-trained Performance: {np.mean(pretrained_accs):.2f}% ± {np.std(pretrained_accs):.2f}%")
+    print(f"Average Improvement: {np.mean(improvements):.2f}% ± {np.std(improvements):.2f}%")
+    print(f"Subjects with Improvement: {sum(1 for imp in improvements if imp > 0)}/{len(improvements)}")
+    print(f"Best Improvement: {np.max(improvements):.2f}%")
+    print(f"Worst Change: {np.min(improvements):.2f}%")
+    print(f"High LR used for {sum(1 for lr in adaptive_lrs if lr > 1e-3)}/{len(adaptive_lrs)} subjects")
+    
+    # Plot results - USING SHARED FUNCTION
+    mmf.plot_all_results(all_results, output_path, args.type_of_subject, "DCN", len(all_results))
+    
+    print('==================== End of script! ====================')
 
 
-# ------------------------- plotting results -------------------------
-# plot all test accuracies
-plt.figure(figsize=(10, 6))
-plt.plot(all_test_accuracies, marker='o', linestyle='-')
-plt.title(f'Subject {type_of_subject} DeepConvNet Test Accuracies for Each Subject')
-plt.xlabel('Subject ID')
-plt.ylabel('Test Accuracy (%)')
-plt.xticks(range(n_subjects), [f'S{i}' for i in range(n_subjects)], rotation=45)
-
-plt.tight_layout()
-plt.savefig(os.path.join(output_path, f'{type_of_subject}_DCN_test_accuracies.png'))
-
-# plot mean and std of train and val accuracies
-df = pd.DataFrame({
-    'Train Accuracy': all_train_accuracies,
-    'Val Accuracy': all_val_accuracies,
-    'Train loss': all_train_losses,
-    'Val loss': all_val_losses
-})
-num_epochs = 100
-# Compute mean and std for each metric across epochs
-metrics = ['Train Accuracy', 'Val Accuracy', 'Train loss', 'Val loss']
-mean_std_df = pd.DataFrame({'Epoch': np.arange(1, num_epochs  + 1)})
-
-for metric in metrics:
-    values = np.array(df[metric].tolist())  # shape: (n_epochs, n_subjects)
-    mean_std_df[f"{metric} Mean"] = values.mean(axis=0)
-    mean_std_df[f"{metric} Std"] = values.std(axis=0)
-
-# --- Plotting ---
-fig, axes = plt.subplots(2, 2, figsize=(14, 8), sharex=True, sharey='row')
-fig.suptitle(f'Subject {type_of_subject} DeepConvNet Training and Validation Metrics Over Epochs', fontsize=16)
-
-plot_params = [
-    ("Train Accuracy", axes[0, 0], "blue"),
-    ("Val Accuracy", axes[0, 1], "green"),
-    ("Train loss", axes[1, 0], "red"),
-    ("Val loss", axes[1, 1], "orange"),
-]
-
-for metric, ax, color in plot_params:
-    mean = mean_std_df[f"{metric} Mean"]
-    std = mean_std_df[f"{metric} Std"]
-    epoch = mean_std_df["Epoch"]
-
-    ax.plot(epoch, mean, label=metric, color=color)
-    ax.fill_between(epoch, mean - std, mean + std, color=color, alpha=0.3)
-    ax.set_title(f"{metric} over Epochs")
-    ax.set_xlabel("Epoch")
-    ylabel = "Accuracy (%)" if "Accuracy" in metric else "Loss"
-    ax.set_ylabel(ylabel)
-
-plt.tight_layout()
-plt.savefig(os.path.join(output_path, f'{type_of_subject}_DCN_training_validation_metrics.png'))
-plt.legend()
-plt.subplots_adjust(top=0.9)  # Adjust top to make room for the suptitle
-plt.close()
-
-print('==================== End of script dcn_adapt.py! ===================')
+if __name__ == '__main__':
+    main()

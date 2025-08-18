@@ -56,10 +56,10 @@ def create_model_combinations():
     
     # ============ CONFIGURATION ============
     # Which models to run - MODIFY THIS LIST to control what gets trained
-    models_to_run = ['msn', 'dsn']  # Options: 'dcn', 'msn', 'dsn'
+    models_to_run = ['dcn','msn', 'dsn']  # Options: 'dcn', 'msn', 'dsn'
     
     # Training parameters
-    clusters = [12]  # Multiple cluster sizes (for MSN and DSN)
+    clusters = [5,12]  # Multiple cluster sizes (for MSN and DSN)
     n_subjects = 50
     epochs = 100
     n_folds = 4

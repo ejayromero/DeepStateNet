@@ -324,11 +324,11 @@ def create_results_dataframe(extracted_results):
         df_data.append(row)
     
     df = pd.DataFrame(df_data)
-    
+    df['cluster_size'] = df['cluster_size'].astype('Int64')
     # Create a more readable model identifier
     df['model_id'] = df.apply(lambda row: 
         f"{row['model_name']}" + 
-        (f"_c{row['cluster_size']}" if row['cluster_size'] != 'N/A' else ""), 
+        (f"_c{row['cluster_size']}" if pd.notna(row['cluster_size']) else ""), 
         axis=1)
     
     # Sort by subject type and test performance
@@ -620,6 +620,91 @@ def get_model_key(row):
     else:
         return f"{row['model_name']}_c{row['cluster_size']}"
 
+def plot_model_comparison(df, score_types=['test_bal_acc', 'test_f1'], metric_type='test'):
+    """
+    Main function that creates 2x2 subplots (top row: balanced accuracy, bottom row: f1)
+    
+    Args:
+        df: DataFrame with model results
+        score_types: List of score types to plot (first will be top row, second bottom row)
+    """
+    if df is None:
+        return
+    
+    # Get the color dictionary
+    color_dict = get_model_colors(df)
+    subject_types = df['subject_type'].unique()
+    n_subjects = len(subject_types)
+    
+    with sns.plotting_context('talk'):
+        fig, axes = plt.subplots(2, n_subjects, figsize=(15, 12))
+        fig.suptitle(f'Model Performance Comparison in {metric_type}', fontsize=16, fontweight='bold')
+        # If only one subject type, make axes 2D
+        if n_subjects == 1:
+            axes = axes.reshape(2, 1)
+        
+        # Plot balanced accuracy on top row
+        for j, subject_type in enumerate(subject_types):
+            plot_single_metric(df, axes[0, j], score_types[0], color_dict, subject_type)
+        
+        # Plot F1 on bottom row  
+        for j, subject_type in enumerate(subject_types):
+            plot_single_metric(df, axes[1, j], score_types[1], color_dict, subject_type)
+        
+        plt.tight_layout()
+        plt.show()
+
+
+def plot_single_metric(df, ax, score_type, color_dict, subject_type):
+    """
+    Plot a single metric for a single subject type on given axis
+    
+    Args:
+        df: DataFrame with model results
+        ax: Matplotlib axis to plot on
+        score_type: The score type to plot (e.g., 'test_f1', 'test_bal_acc')
+        color_dict: Color dictionary from get_model_colors()
+        subject_type: Which subject type to plot ('dependent', 'independent', 'adaptive')
+    """
+    # Filter data for this subject type
+    subset = df[df['subject_type'] == subject_type]
+    
+    # Create model keys and get corresponding colors
+    model_keys = [get_model_key(row) for _, row in subset.iterrows()]
+    colors = [color_dict[subject_type][key] for key in model_keys]
+    
+    # Get mean and std columns
+    mean_col = f'{score_type}_mean'
+    std_col = f'{score_type}_std'
+    
+    # Create bar plot with colors
+    x_pos = range(len(subset))
+    bars = ax.bar(x_pos, subset[mean_col], 
+                  yerr=subset[std_col], 
+                  capsize=3,
+                  color=colors)
+    
+    # Set labels based on score type
+    if 'f1' in score_type.lower():
+        ylabel = 'Test F1 Score (%)'
+    elif 'bal_acc' in score_type.lower():
+        ylabel = 'Test Balanced Accuracy (%)'
+    else:
+        ylabel = f'{score_type.replace("_", " ").title()} (%)'
+    
+    ax.set_title(f'{subject_type.title()} Models', fontsize=12, fontweight='bold')
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(subset['model_id'], rotation=45, ha='right', fontsize=10)
+    ax.tick_params(axis='x', bottom=True)
+
+    # Add value labels on bars
+    for bar, mean_val, std_val in zip(bars, subset[mean_col], subset[std_col]):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std_val + 0.5,
+                f'{mean_val:.1f}%', ha='center', va='bottom', fontsize=9)
+
+    ax.set_ylim(0, max(df[mean_col] + df[std_col]) + 5)
+
 def plot_model_violin_comparison(df, transpose=False):
     """
     Create violin plots comparing all models across subject types
@@ -737,8 +822,13 @@ def plot_model_violin_comparison(df, transpose=False):
                 
                 # Create violin plot with no inner elements and cut=0
                 sns.violinplot(data=subset, x='model', y='score', ax=ax, 
-                             palette=colors, cut=0)
-            
+                            palette=colors,
+                            inner_kws=dict(box_width=10, whis_width=2, color = 'dimgray'), 
+                            cut=0)
+                # Add mean markers
+                # means = subset.groupby('model')['score'].mean()
+                # for i, (model, mean_val) in enumerate(means.items()):
+                #     ax.scatter(i, mean_val, color='red', s=100, zorder=3, marker='_')
             # Formatting
             ax.set_ylim(-3, 103)
             ax.set_title(f'{subject_type.title()}' if row == 0 else '')
@@ -886,7 +976,9 @@ def plot_grouped_violin_comparison(df, save_path=None):
                             colors.append(dcn_color)
                         
                         sns.violinplot(data=subset_dcn, x='subject_type', y='score', 
-                                     ax=ax, palette=colors, cut=0)
+                                    ax=ax, palette=colors,
+                                    inner_kws=dict(box_width=10, whis_width=2, color = 'dimgray'), 
+                                    cut=0)
                         
                         unique_models = unique_subjects
                         
@@ -925,7 +1017,9 @@ def plot_grouped_violin_comparison(df, save_path=None):
                         
                         # Create violin plot
                         sns.violinplot(data=family_data, x='x_label', y='score', 
-                                     ax=ax, palette=colors, cut=0, order=unique_combos)
+                                    ax=ax, palette=colors,
+                                    inner_kws=dict(box_width=10, whis_width=2, color = 'dimgray'), 
+                                    cut=0, order=unique_combos)
                         
                         unique_models = unique_combos
                 
@@ -971,1136 +1065,1688 @@ def plot_grouped_comparison(df, save_path=None):
     """Create grouped violin comparison plot with same style as main plot"""
     return plot_grouped_violin_comparison(df, save_path)
 
-# ================================== Statistics =====================================
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
-from scipy import stats
-from scipy.stats import f_oneway, friedmanchisquare, shapiro, levene, kruskal
-import statsmodels.api as sm
-from statsmodels.stats.anova import AnovaRM
-from statsmodels.stats.multicomp import pairwise_tukeyhsd
-from statsmodels.stats.power import FTestAnovaPower
-from statsmodels.stats.multitest import multipletests
-import warnings
-from itertools import combinations
-import os
 
-def get_model_components(model_name, cluster_size):
-    """Extract model family, architecture type, and cluster info"""
-    
-    # Model family
-    if model_name == 'dcn':
-        family = 'DCN'
-        architecture = 'base'
-        has_clusters = False
-    elif model_name.startswith('dsn_'):
-        family = 'DSN'
-        architecture = model_name.replace('dsn_', '')
-        has_clusters = True
-    else:  # MSN variants
-        family = 'MSN'
-        architecture = model_name
-        has_clusters = True
-    
-    # Architecture details
-    is_multiscale = 'multiscale' in architecture
-    is_embedded = 'embedded' in architecture
-    
-    return {
-        'family': family,
-        'architecture': architecture,
-        'is_multiscale': is_multiscale,
-        'is_embedded': is_embedded,
-        'has_clusters': has_clusters,
-        'cluster_size': cluster_size if has_clusters else None
+
+
+
+
+# Default plot style dictionary - modify this to change all plot styles at once
+# Default plot style dictionary - modify this to change all plot styles at once
+DEFAULT_PLOT_STYLE = {
+    'line': {
+        'marker': 'o',
+        'markersize': 4,
+        'linewidth': 2,
+        'alpha': 0.8,
+        'linestyle': '--'  # dashed lines
+    },
+    'scatter': {
+        'marker': 'o',
+        's': 40,
+        'alpha': 0.7
+    },
+    'figure': {
+        'context': 'talk',
+        'figsize_2x3': (24, 16),
+        'figsize_1x3': (24, 8),
+        'suptitle_fontsize': 16,
+        'title_fontsize': 14,
+        'legend_fontsize': 10,
+        'grid_alpha': 0.3
     }
+}
 
-def get_model_short_name(model_name, cluster_size):
-    """Get shortened model names for better plot readability"""
-    model_mapping = {
-        'dcn': 'DCN',
-        'msn': 'MSN',
-        'msn_embedded': 'MSN(emb)',
-        'multiscale_msn': 'MSN(multi)',
-        'multiscale_msn_embedded': 'MSN(multi+emb)',
-        'dsn_msn': 'DSN',
-        'dsn_msn_embedded': 'DSN(emb)',
-        'dsn_multiscale_msn': 'DSN(multi)',
-        'dsn_multiscale_msn_embedded': 'DSN(multi+emb)'
-    }
-    
-    base_name = model_mapping.get(model_name, model_name)
-    
-    if model_name != 'dcn':
-        return f"{base_name}_C{cluster_size}"
-    return base_name
-
-def prepare_analysis_data(df):
-    """Convert DataFrame to analysis-ready format with proper grouping"""
-    analysis_data = []
-    
-    for _, row in df.iterrows():
-        model_short = get_model_short_name(row['model_name'], row['cluster_size'])
-        model_components = get_model_components(row['model_name'], row['cluster_size'])
-        
-        n_subjects = len(row['test_bal_acc_all'])
-        
-        # Balanced accuracy data
-        for i, score in enumerate(row['test_bal_acc_all']):
-            analysis_data.append({
-                'subject_id': f'S{i:03d}',
-                'subject_type': row['subject_type'],
-                'model_name': row['model_name'],
-                'model_short': model_short,
-                'cluster_size': row['cluster_size'],
-                'metric': 'balanced_accuracy',
-                'score': score * 100,  # Convert to percentage
-                **model_components
-            })
-        
-        # F1 score data
-        for i, score in enumerate(row['test_f1_all']):
-            analysis_data.append({
-                'subject_id': f'S{i:03d}',
-                'subject_type': row['subject_type'],
-                'model_name': row['model_name'],
-                'model_short': model_short,
-                'cluster_size': row['cluster_size'],
-                'metric': 'f1_score',
-                'score': score * 100,  # Convert to percentage
-                **model_components
-            })
-    
-    return pd.DataFrame(analysis_data)
-
-class RigorousEEGAnalyzer:
-    """Statistically rigorous EEG model analyzer with proper corrections"""
-    
-    def __init__(self, data_df, base_alpha=0.05):
-        self.data = data_df
-        self.base_alpha = base_alpha
-        
-        # Define research questions and their alpha corrections
-        self.research_questions = [
-            'models_within_subjects',
-            'subjects_within_models', 
-            'model_families',
-            'cluster_effects',
-            'architecture_effects'
-        ]
-        
-        # Family-wise error correction across research questions
-        self.n_questions = len(self.research_questions)
-        self.alpha_per_family = self.base_alpha / self.n_questions
-        
-        print(f"🎯 STATISTICAL RIGOR SETTINGS:")
-        print(f"   Base α = {self.base_alpha}")
-        print(f"   Number of research question families = {self.n_questions}")
-        print(f"   Corrected α per family = {self.alpha_per_family:.4f}")
-        print(f"   Post-hoc correction: False Discovery Rate (FDR)")
-        
-        self.results = {}
-        self.print_data_summary()
-    
-    def print_data_summary(self):
-        """Print detailed data availability summary"""
-        print(f"\n📊 DATA AVAILABILITY SUMMARY")
-        print("="*80)
-        
-        # Create comprehensive availability matrix
-        all_models = sorted(self.data['model_short'].unique())
-        all_subjects = sorted(self.data['subject_type'].unique())
-        
-        print(f"\n📋 Model Availability Matrix:")
-        header = f"{'Model':<25}"
-        for subject in all_subjects:
-            header += f" {subject.capitalize():<12}"
-        print(header)
-        print("-" * len(header))
-        
-        availability_matrix = {}
-        for model in all_models:
-            row = f"{model:<25}"
-            availability_matrix[model] = {}
-            for subject in all_subjects:
-                has_model = len(self.data[(self.data['model_short'] == model) & 
-                                        (self.data['subject_type'] == subject)]) > 0
-                status = "✅" if has_model else "❌"
-                row += f" {status:<12}"
-                availability_matrix[model][subject] = has_model
-            print(row)
-        
-        # Summary statistics
-        print(f"\n📊 Data Summary:")
-        for subject in all_subjects:
-            subject_data = self.data[self.data['subject_type'] == subject]
-            n_models = len(subject_data['model_short'].unique())
-            n_families = len(subject_data['family'].unique())
-            print(f"   {subject}: {n_models} models, {n_families} families")
-        
-        # Training completeness analysis
-        complete_models = [m for m in all_models 
-                          if all(availability_matrix[m].get(s, False) for s in all_subjects)]
-        partial_models = [m for m in all_models if m not in complete_models 
-                         and any(availability_matrix[m].get(s, False) for s in all_subjects)]
-        
-        print(f"\n🔄 Training Status:")
-        print(f"   ✅ Complete across all subjects: {len(complete_models)} models")
-        if complete_models:
-            print(f"      {complete_models}")
-        print(f"   🔄 Partial training: {len(partial_models)} models")
-        print(f"   📊 Analysis power: {len(complete_models)}/{len(all_models)} models ready for cross-subject analysis")
-    
-    def perform_robust_statistical_test(self, data_subset, comparison_name, alpha):
-        """Perform robust statistical test with proper effect size calculation"""
-        
-        groups = data_subset['group'].unique()
-        n_groups = len(groups)
-        
-        if n_groups < 2:
-            return {'success': False, 'reason': 'insufficient_groups', 'n_groups': n_groups}
-        
-        # Prepare group data
-        group_data = []
-        group_names = []
-        group_stats = {}
-        
-        for group in groups:
-            group_scores = data_subset[data_subset['group'] == group]['score'].values
-            if len(group_scores) > 0:
-                group_data.append(group_scores)
-                group_names.append(group)
-                group_stats[group] = {
-                    'n': len(group_scores),
-                    'mean': np.mean(group_scores),
-                    'median': np.median(group_scores),
-                    'std': np.std(group_scores, ddof=1),
-                    'q25': np.percentile(group_scores, 25),
-                    'q75': np.percentile(group_scores, 75)
-                }
-        
-        if len(group_data) < 2:
-            return {'success': False, 'reason': 'insufficient_data'}
-        
-        # Check if all groups have same number of subjects
-        group_lengths = [len(g) for g in group_data]
-        all_same_length = len(set(group_lengths)) == 1
-        
-        result = {
-            'comparison_name': comparison_name,
-            'n_groups': len(group_data),
-            'group_names': group_names,
-            'group_stats': group_stats,
-            'all_same_length': all_same_length,
-            'alpha_used': alpha
-        }
-        
-        try:
-            if all_same_length and len(group_data) >= 3:
-                # Friedman test (non-parametric repeated measures)
-                stat, p_value = friedmanchisquare(*group_data)
-                test_type = 'Friedman Test'
-                
-                # Effect size (Kendall's W)
-                n = len(group_data[0])  # number of subjects
-                k = len(group_data)     # number of groups
-                w = stat / (n * (k - 1))  # Kendall's W
-                effect_size = w
-                effect_size_name = "Kendall's W"
-                
-            elif len(group_data) >= 3:
-                # Kruskal-Wallis test (non-parametric independent samples)
-                stat, p_value = kruskal(*group_data)
-                test_type = 'Kruskal-Wallis Test'
-                
-                # Effect size (eta-squared approximation)
-                total_n = sum(group_lengths)
-                eta_squared = (stat - len(group_data) + 1) / (total_n - len(group_data))
-                effect_size = max(0, min(eta_squared, 1))  # Bound between 0 and 1
-                effect_size_name = "η² (approx)"
-                
-            elif len(group_data) == 2:
-                # Two groups comparison
-                if all_same_length:
-                    # Wilcoxon signed-rank test
-                    stat, p_value = stats.wilcoxon(group_data[0], group_data[1])
-                    test_type = 'Wilcoxon Signed-Rank Test'
-                    
-                    # Effect size (rank-biserial correlation)
-                    n = len(group_data[0])
-                    r = 1 - (2 * stat) / (n * (n + 1))
-                    effect_size = abs(r)
-                    effect_size_name = "r (rank-biserial)"
-                    
-                else:
-                    # Mann-Whitney U test
-                    stat, p_value = stats.mannwhitneyu(group_data[0], group_data[1], 
-                                                      alternative='two-sided')
-                    test_type = 'Mann-Whitney U Test'
-                    
-                    # Effect size (rank-biserial correlation)
-                    n1, n2 = len(group_data[0]), len(group_data[1])
-                    r = 1 - (2 * stat) / (n1 * n2)
-                    effect_size = abs(r)
-                    effect_size_name = "r (rank-biserial)"
-            
-            result.update({
-                'test_type': test_type,
-                'statistic': stat,
-                'p_value': p_value,
-                'effect_size': effect_size,
-                'effect_size_name': effect_size_name,
-                'success': True
-            })
-            
-        except Exception as e:
-            result.update({
-                'success': False,
-                'reason': f'Statistical test failed: {str(e)}'
-            })
-            return result
-        
-        # Interpret effect size
-        result['effect_interpretation'] = self.interpret_effect_size(effect_size, effect_size_name)
-        
-        # Post-hoc analysis if significant and multiple groups
-        if result['success'] and result['p_value'] < alpha and len(group_data) > 2:
-            result['posthoc'] = self.perform_fdr_posthoc(group_data, group_names, alpha)
-        
-        return result
-    
-    def interpret_effect_size(self, effect_size, effect_size_name):
-        """Interpret effect size magnitude"""
-        if pd.isna(effect_size):
-            return 'unknown'
-        
-        if 'W' in effect_size_name or 'η²' in effect_size_name:
-            # For eta-squared and Kendall's W
-            if effect_size < 0.01:
-                return 'negligible'
-            elif effect_size < 0.06:
-                return 'small'
-            elif effect_size < 0.14:
-                return 'medium'
-            else:
-                return 'large'
-        else:
-            # For correlation-based measures (r)
-            if effect_size < 0.1:
-                return 'negligible'
-            elif effect_size < 0.3:
-                return 'small'
-            elif effect_size < 0.5:
-                return 'medium'
-            else:
-                return 'large'
-    
-    def perform_fdr_posthoc(self, group_data, group_names, alpha):
-        """Perform post-hoc tests with FDR correction"""
-        
-        n_comparisons = len(list(combinations(range(len(group_data)), 2)))
-        pairwise_results = []
-        p_values = []
-        
-        # Perform all pairwise comparisons
-        for i, j in combinations(range(len(group_data)), 2):
-            group1_data = group_data[i]
-            group2_data = group_data[j]
-            group1_name = group_names[i]
-            group2_name = group_names[j]
-            
-            # Choose appropriate test
-            if len(group1_data) == len(group2_data):
-                # Paired comparison
-                try:
-                    stat, p_val = stats.wilcoxon(group1_data, group2_data)
-                    test_type = 'Wilcoxon'
-                    
-                    # Effect size
-                    n = len(group1_data)
-                    r = 1 - (2 * stat) / (n * (n + 1))
-                    effect_size = abs(r)
-                    
-                except:
-                    # Fallback to Mann-Whitney if Wilcoxon fails
-                    stat, p_val = stats.mannwhitneyu(group1_data, group2_data, 
-                                                   alternative='two-sided')
-                    test_type = 'Mann-Whitney'
-                    n1, n2 = len(group1_data), len(group2_data)
-                    r = 1 - (2 * stat) / (n1 * n2)
-                    effect_size = abs(r)
-            else:
-                # Independent comparison
-                stat, p_val = stats.mannwhitneyu(group1_data, group2_data, 
-                                               alternative='two-sided')
-                test_type = 'Mann-Whitney'
-                n1, n2 = len(group1_data), len(group2_data)
-                r = 1 - (2 * stat) / (n1 * n2)
-                effect_size = abs(r)
-            
-            # Store results
-            median_diff = np.median(group1_data) - np.median(group2_data)
-            
-            pairwise_results.append({
-                'comparison': f'{group1_name} vs {group2_name}',
-                'test_type': test_type,
-                'statistic': stat,
-                'p_value': p_val,
-                'effect_size': effect_size,
-                'effect_interpretation': self.interpret_effect_size(effect_size, 'r'),
-                'group1_median': np.median(group1_data),
-                'group2_median': np.median(group2_data),
-                'median_diff': median_diff,
-                'group1_name': group1_name,
-                'group2_name': group2_name
-            })
-            
-            p_values.append(p_val)
-        
-        # Apply FDR correction
-        if p_values:
-            rejected, p_corrected, alpha_sidak, alpha_bonf = multipletests(
-                p_values, alpha=alpha, method='fdr_bh'
-            )
-            
-            # Update results with FDR correction
-            for i, result in enumerate(pairwise_results):
-                result['p_fdr'] = p_corrected[i]
-                result['significant_fdr'] = rejected[i]
-                result['alpha_fdr'] = alpha  # FDR controls this automatically
-        
-        return {
-            'pairwise_comparisons': pairwise_results,
-            'n_comparisons': n_comparisons,
-            'fdr_alpha': alpha,
-            'n_significant': sum(rejected) if p_values else 0
-        }
-    
-    def analyze_models_within_subjects(self, metric='balanced_accuracy'):
-        """Q1: Compare all models within each subject type"""
-        print(f"\n{'='*80}")
-        print(f"Q1: WHICH MODEL PERFORMS BEST WITHIN EACH SUBJECT TYPE? ({metric.upper()})")
-        print(f"Alpha (family-corrected) = {self.alpha_per_family:.4f}")
-        print(f"{'='*80}")
-        
-        metric_data = self.data[self.data['metric'] == metric]
-        results = {}
-        
-        for subject_type in metric_data['subject_type'].unique():
-            print(f"\n🔍 Analyzing {subject_type} subjects...")
-            
-            subset = metric_data[metric_data['subject_type'] == subject_type].copy()
-            subset['group'] = subset['model_short']
-            
-            available_models = subset['model_short'].unique()
-            print(f"   Models available: {len(available_models)}")
-            print(f"   {list(available_models)}")
-            
-            if len(available_models) < 2:
-                print(f"   ⚠️  Insufficient models for comparison (need ≥2)")
-                results[subject_type] = {
-                    'success': False, 
-                    'reason': 'insufficient_models',
-                    'available_models': list(available_models)
-                }
-                continue
-            
-            result = self.perform_robust_statistical_test(
-                subset, f"{subject_type}_models", self.alpha_per_family
-            )
-            results[subject_type] = result
-            
-            if result['success']:
-                significance = "SIGNIFICANT" if result['p_value'] < self.alpha_per_family else "NOT SIGNIFICANT"
-                print(f"   ✅ {result['test_type']}")
-                print(f"      Statistic = {result['statistic']:.3f}")
-                print(f"      p-value = {result['p_value']:.6f}")
-                print(f"      Result: {significance}")
-                print(f"      Effect size: {result['effect_size_name']} = {result['effect_size']:.3f} ({result['effect_interpretation']})")
-                
-                if 'posthoc' in result:
-                    n_sig = result['posthoc']['n_significant']
-                    n_total = result['posthoc']['n_comparisons']
-                    print(f"   🔍 Post-hoc (FDR): {n_sig}/{n_total} significant pairwise differences")
-                    
-                    # Show top significant differences
-                    significant_pairs = [p for p in result['posthoc']['pairwise_comparisons'] 
-                                       if p['significant_fdr']]
-                    if significant_pairs:
-                        # Sort by effect size
-                        significant_pairs.sort(key=lambda x: x['effect_size'], reverse=True)
-                        print(f"   🏆 Top significant differences:")
-                        for pair in significant_pairs[:5]:  # Show top 5
-                            print(f"      • {pair['comparison']}: "
-                                  f"Δ={pair['median_diff']:.2f}%, "
-                                  f"r={pair['effect_size']:.3f} ({pair['effect_interpretation']}), "
-                                  f"p_FDR={pair['p_fdr']:.4f}")
-            else:
-                print(f"   ❌ Analysis failed: {result.get('reason', 'Unknown error')}")
-        
-        return results
-    
-    def analyze_subjects_within_models(self, metric='balanced_accuracy'):
-        """Q2: Compare subject types within each model"""
-        print(f"\n{'='*80}")
-        print(f"Q2: DO MODELS PERFORM DIFFERENTLY ACROSS SUBJECT TYPES? ({metric.upper()})")
-        print(f"Alpha (family-corrected) = {self.alpha_per_family:.4f}")
-        print(f"{'='*80}")
-        
-        metric_data = self.data[self.data['metric'] == metric]
-        results = {}
-        
-        # Analyze each model across subject types
-        for model_short in sorted(metric_data['model_short'].unique()):
-            print(f"\n🔍 Analyzing {model_short} across subject types...")
-            
-            subset = metric_data[metric_data['model_short'] == model_short].copy()
-            subset['group'] = subset['subject_type']
-            
-            available_subjects = subset['subject_type'].unique()
-            print(f"   Subject types available: {list(available_subjects)}")
-            
-            if len(available_subjects) < 2:
-                print(f"   ⚠️  Insufficient subject types (need ≥2) - training in progress")
-                results[model_short] = {
-                    'success': False,
-                    'reason': 'insufficient_subjects',
-                    'available_subjects': list(available_subjects)
-                }
-                continue
-            
-            result = self.perform_robust_statistical_test(
-                subset, f"{model_short}_subjects", self.alpha_per_family
-            )
-            results[model_short] = result
-            
-            if result['success']:
-                significance = "SIGNIFICANT" if result['p_value'] < self.alpha_per_family else "NOT SIGNIFICANT"
-                print(f"   ✅ {result['test_type']}")
-                print(f"      Statistic = {result['statistic']:.3f}")
-                print(f"      p-value = {result['p_value']:.6f}")
-                print(f"      Result: {significance}")
-                print(f"      Effect size: {result['effect_size_name']} = {result['effect_size']:.3f} ({result['effect_interpretation']})")
-                
-                if 'posthoc' in result:
-                    significant_pairs = [p for p in result['posthoc']['pairwise_comparisons'] 
-                                       if p['significant_fdr']]
-                    if significant_pairs:
-                        print(f"   🏆 Significant subject type differences:")
-                        for pair in significant_pairs:
-                            print(f"      • {pair['comparison']}: "
-                                  f"Δ={pair['median_diff']:.2f}%, p_FDR={pair['p_fdr']:.4f}")
-            else:
-                print(f"   ❌ Analysis failed: {result.get('reason', 'Unknown error')}")
-        
-        return results
-    
-    def analyze_model_families(self, metric='balanced_accuracy'):
-        """Q3: Compare DCN vs MSN vs DSN families overall"""
-        print(f"\n{'='*80}")
-        print(f"Q3: WHICH MODEL FAMILY PERFORMS BEST OVERALL? ({metric.upper()})")
-        print("Pooling across all subject types and model variants")
-        print(f"Alpha (family-corrected) = {self.alpha_per_family:.4f}")
-        print(f"{'='*80}")
-        
-        metric_data = self.data[self.data['metric'] == metric].copy()
-        metric_data['group'] = metric_data['family']
-        
-        families = metric_data['family'].unique()
-        print(f"\nAvailable families: {list(families)}")
-        
-        # Check data balance
-        for family in families:
-            family_data = metric_data[metric_data['family'] == family]
-            n_obs = len(family_data)
-            n_subjects = len(family_data['subject_type'].unique())
-            print(f"   {family}: {n_obs} observations, {n_subjects} subject types")
-        
-        if len(families) < 2:
-            print("⚠️  Insufficient model families for comparison")
-            return {'model_families': {'success': False, 'reason': 'insufficient_families'}}
-        
-        result = self.perform_robust_statistical_test(
-            metric_data, "model_families", self.alpha_per_family
-        )
-        
-        print(f"\n🔍 Family comparison results:")
-        if result['success']:
-            significance = "SIGNIFICANT" if result['p_value'] < self.alpha_per_family else "NOT SIGNIFICANT"
-            print(f"   ✅ {result['test_type']}")
-            print(f"      Statistic = {result['statistic']:.3f}")
-            print(f"      p-value = {result['p_value']:.6f}")
-            print(f"      Result: {significance}")
-            print(f"      Effect size: {result['effect_size_name']} = {result['effect_size']:.3f} ({result['effect_interpretation']})")
-            
-            if 'posthoc' in result:
-                significant_pairs = [p for p in result['posthoc']['pairwise_comparisons'] 
-                                   if p['significant_fdr']]
-                if significant_pairs:
-                    print(f"   🏆 Significant family differences:")
-                    for pair in significant_pairs:
-                        better_family = pair['group1_name'] if pair['median_diff'] > 0 else pair['group2_name']
-                        print(f"      • {pair['comparison']}: "
-                              f"Δ={abs(pair['median_diff']):.2f}% ({better_family} better), "
-                              f"p_FDR={pair['p_fdr']:.4f}")
-        else:
-            print(f"   ❌ Analysis failed: {result.get('reason', 'Unknown error')}")
-        
-        return {'model_families': result}
-    
-    def analyze_cluster_effects(self, metric='balanced_accuracy'):
-        """Q4: Compare 5 vs 12 clusters within MSN and DSN families"""
-        print(f"\n{'='*80}")
-        print(f"Q4: WHICH CLUSTER SIZE PERFORMS BETTER? ({metric.upper()})")
-        print(f"Alpha (family-corrected) = {self.alpha_per_family:.4f}")
-        print(f"{'='*80}")
-        
-        metric_data = self.data[self.data['metric'] == metric]
-        results = {}
-        
-        for family in ['MSN', 'DSN']:
-            print(f"\n🔍 Analyzing {family} cluster size effects...")
-            
-            family_data = metric_data[metric_data['family'] == family].copy()
-            
-            if len(family_data) == 0:
-                print(f"   ⚠️  No {family} models available yet")
-                results[f'{family}_clusters'] = {'success': False, 'reason': 'no_family_data'}
-                continue
-            
-            family_data['group'] = 'C' + family_data['cluster_size'].astype(str)
-            cluster_sizes = family_data['cluster_size'].unique()
-            
-            print(f"   Available cluster sizes: {list(cluster_sizes)}")
-            
-            for cluster in cluster_sizes:
-                cluster_subset = family_data[family_data['cluster_size'] == cluster]
-                n_models = len(cluster_subset['model_short'].unique())
-                n_subjects = len(cluster_subset['subject_type'].unique())
-                print(f"      C{cluster}: {n_models} models, {n_subjects} subject types")
-            
-            if len(cluster_sizes) < 2:
-                print(f"   ⚠️  Need both C5 and C12 for comparison")
-                results[f'{family}_clusters'] = {'success': False, 'reason': 'insufficient_clusters'}
-                continue
-            
-            result = self.perform_robust_statistical_test(
-                family_data, f"{family}_clusters", self.alpha_per_family
-            )
-            results[f'{family}_clusters'] = result
-            
-            if result['success']:
-                significance = "SIGNIFICANT" if result['p_value'] < self.alpha_per_family else "NOT SIGNIFICANT"
-                print(f"   ✅ {result['test_type']}")
-                print(f"      p-value = {result['p_value']:.6f} ({significance})")
-                print(f"      Effect size: {result['effect_size_name']} = {result['effect_size']:.3f} ({result['effect_interpretation']})")
-                
-                # Determine which cluster size is better
-                if significance == "SIGNIFICANT" and 'posthoc' in result:
-                    for pair in result['posthoc']['pairwise_comparisons']:
-                        if 'C5' in pair['comparison'] and 'C12' in pair['comparison']:
-                            better_cluster = pair['group1_name'] if pair['median_diff'] > 0 else pair['group2_name']
-                            print(f"   🏆 {better_cluster} performs better (Δ={abs(pair['median_diff']):.2f}%)")
-            else:
-                print(f"   ❌ Analysis failed: {result.get('reason', 'Unknown error')}")
-        
-        return results
-    
-    def analyze_architecture_effects(self, metric='balanced_accuracy'):
-        """Q5: Compare architectural variants"""
-        print(f"\n{'='*80}")
-        print(f"Q5: WHICH ARCHITECTURAL VARIANTS PERFORM BETTER? ({metric.upper()})")
-        print(f"Alpha (family-corrected) = {self.alpha_per_family:.4f}")
-        print(f"{'='*80}")
-        
-        metric_data = self.data[self.data['metric'] == metric]
-        results = {}
-        
-        # Multiscale effect analysis
-        print(f"\n🔍 Analyzing multiscale effects...")
-        multiscale_data = metric_data[metric_data['family'].isin(['MSN', 'DSN'])].copy()
-        
-        if len(multiscale_data) > 0:
-            multiscale_data['group'] = multiscale_data['is_multiscale'].map({
-                True: 'multiscale', False: 'base'
-            })
-            
-            multiscale_counts = multiscale_data.groupby('group').size()
-            print(f"   Data: {dict(multiscale_counts)}")
-            
-            if len(multiscale_data['group'].unique()) >= 2:
-                result = self.perform_robust_statistical_test(
-                    multiscale_data, "multiscale_effect", self.alpha_per_family
-                )
-                results['multiscale'] = result
-                
-                if result['success']:
-                    significance = "SIGNIFICANT" if result['p_value'] < self.alpha_per_family else "NOT SIGNIFICANT"
-                    print(f"   ✅ Multiscale vs Base: {result['test_type']}")
-                    print(f"      p-value = {result['p_value']:.6f} ({significance})")
-                    print(f"      Effect size: {result['effect_size_name']} = {result['effect_size']:.3f} ({result['effect_interpretation']})")
-                    
-                    if 'posthoc' in result:
-                        for pair in result['posthoc']['pairwise_comparisons']:
-                            better_arch = pair['group1_name'] if pair['median_diff'] > 0 else pair['group2_name']
-                            print(f"   🏆 {better_arch} performs better (Δ={abs(pair['median_diff']):.2f}%)")
-            else:
-                print(f"   ⚠️  Insufficient multiscale data for comparison")
-                results['multiscale'] = {'success': False, 'reason': 'insufficient_data'}
-        
-        # Embedding effect analysis
-        print(f"\n🔍 Analyzing embedding effects...")
-        embedding_data = metric_data[metric_data['family'].isin(['MSN', 'DSN'])].copy()
-        
-        if len(embedding_data) > 0:
-            embedding_data['group'] = embedding_data['is_embedded'].map({
-                True: 'embedded', False: 'base'
-            })
-            
-            embedding_counts = embedding_data.groupby('group').size()
-            print(f"   Data: {dict(embedding_counts)}")
-            
-            if len(embedding_data['group'].unique()) >= 2:
-                result = self.perform_robust_statistical_test(
-                    embedding_data, "embedding_effect", self.alpha_per_family
-                )
-                results['embedding'] = result
-                
-                if result['success']:
-                    significance = "SIGNIFICANT" if result['p_value'] < self.alpha_per_family else "NOT SIGNIFICANT"
-                    print(f"   ✅ Embedded vs Base: {result['test_type']}")
-                    print(f"      p-value = {result['p_value']:.6f} ({significance})")
-                    print(f"      Effect size: {result['effect_size_name']} = {result['effect_size']:.3f} ({result['effect_interpretation']})")
-                    
-                    if 'posthoc' in result:
-                        for pair in result['posthoc']['pairwise_comparisons']:
-                            better_arch = pair['group1_name'] if pair['median_diff'] > 0 else pair['group2_name']
-                            print(f"   🏆 {better_arch} performs better (Δ={abs(pair['median_diff']):.2f}%)")
-            else:
-                print(f"   ⚠️  Insufficient embedding data for comparison")
-                results['embedding'] = {'success': False, 'reason': 'insufficient_data'}
-        
-        return results
-    
-    def run_comprehensive_analysis(self):
-        """Run all analyses with proper statistical rigor"""
-        print("\n🚀 RUNNING STATISTICALLY RIGOROUS EEG MODEL ANALYSIS")
-        print("="*80)
-        print("📊 Statistical Framework:")
-        print(f"   • Family-wise error rate control across {self.n_questions} research questions")
-        print(f"   • Base α = {self.base_alpha}, Corrected α per family = {self.alpha_per_family:.4f}")
-        print(f"   • Post-hoc correction: False Discovery Rate (Benjamini-Hochberg)")
-        print(f"   • Effect sizes: Context-appropriate measures with interpretations")
-        print("="*80)
-        
-        self.results = {}
-        
-        for metric in ['balanced_accuracy', 'f1_score']:
-            print(f"\n🎯 ANALYZING {metric.upper().replace('_', ' ')}")
-            print("="*80)
-            
-            self.results[metric] = {
-                'models_within_subjects': self.analyze_models_within_subjects(metric),
-                'subjects_within_models': self.analyze_subjects_within_models(metric),
-                'model_families': self.analyze_model_families(metric),
-                'cluster_effects': self.analyze_cluster_effects(metric),
-                'architecture_effects': self.analyze_architecture_effects(metric)
-            }
-        
-        return self.results
-
-def create_comprehensive_horizontal_plots(analyzer, output_path=None):
-    """Create horizontal bar plots for all analysis results"""
-    
-    if output_path:
-        os.makedirs(output_path, exist_ok=True)
-    
-    results = analyzer.results
-    
-    # Set up the plot style
-    plt.style.use('default')
-    sns.set_palette("husl")
-    
-    # Create figure with 5 subplots (2x3 grid, with last subplot spanning)
-    fig, axes = plt.subplots(3, 2, figsize=(20, 20))
-    fig.delaxes(axes[2, 1])  # Remove the bottom-right subplot
-    
-    # Color scheme
-    colors = {
-        'significant': '#2E8B57',      # Dark green
-        'not_significant': '#DC143C',  # Crimson  
-        'no_data': '#808080',          # Gray
-        'pending': '#FFA500'           # Orange
-    }
-    
-    # Analysis configurations with subplot positions
-    analysis_configs = [
-        ('models_within_subjects', 'Q1: Best Models within Subject Types'),
-        ('subjects_within_models', 'Q2: Subject Effects within Models'),
-        ('model_families', 'Q3: Model Family Comparison'),
-        ('cluster_effects', 'Q4: Cluster Size Effects'), 
-        ('architecture_effects', 'Q5: Architecture Effects')
-    ]
-    
-    # Subplot positions
-    subplot_positions = [(0,0), (0,1), (1,0), (1,1), (2,0)]
-    
-    for analysis_idx, (analysis_key, analysis_title) in enumerate(analysis_configs):
-        row, col = subplot_positions[analysis_idx]
-        ax = axes[row, col]
-        
-        # Combine data from both metrics for plotting
-        combined_plot_data = []
-        
-        for metric in ['balanced_accuracy', 'f1_score']:
-            metric_title = metric.replace('_', ' ').title()
-            
-            if analysis_key in results[metric]:
-                analysis_results = results[metric][analysis_key]
-                
-                # Extract data for plotting
-                for key, result in analysis_results.items():
-                    if isinstance(result, dict):
-                        if result.get('success', False):
-                            p_val = result.get('p_value', 1.0)
-                            effect_size = result.get('effect_size', 0)
-                            effect_size_name = result.get('effect_size_name', '')
-                            is_significant = p_val < analyzer.alpha_per_family
-                            
-                            # Handle very small p-values and calculate -log10(p)
-                            if p_val <= 0:
-                                neg_log_p = 50  # Cap for extremely small p-values
-                            elif p_val < 1e-50:
-                                neg_log_p = 50
-                            else:
-                                neg_log_p = -np.log10(p_val)
-                            
-                            combined_plot_data.append({
-                                'name': f"{key} ({metric_title})",
-                                'neg_log_p': neg_log_p,
-                                'effect_size': effect_size,
-                                'effect_size_name': effect_size_name,
-                                'is_significant': is_significant,
-                                'p_value': p_val,
-                                'metric': metric,
-                                'comparison': key,
-                                'status': 'significant' if is_significant else 'not_significant'
-                            })
-                        else:
-                            reason = result.get('reason', 'unknown')
-                            if 'insufficient' in reason or 'training' in reason:
-                                status = 'pending'
-                            else:
-                                status = 'no_data'
-                            
-                            combined_plot_data.append({
-                                'name': f"{key} ({metric_title})",
-                                'neg_log_p': 0.05,  # Very small value for visibility
-                                'effect_size': 0,
-                                'effect_size_name': '',
-                                'is_significant': False,
-                                'p_value': 1.0,
-                                'metric': metric,
-                                'comparison': key,
-                                'status': status
-                            })
-        
-        if combined_plot_data:
-            # Sort by significance and effect size
-            combined_plot_data.sort(key=lambda x: (x['is_significant'], x['effect_size']), reverse=True)
-            
-            names = [item['name'] for item in combined_plot_data]
-            neg_log_p_values = [item['neg_log_p'] for item in combined_plot_data]
-            statuses = [item['status'] for item in combined_plot_data]
-            effect_sizes = [item['effect_size'] for item in combined_plot_data]
-            effect_size_names = [item['effect_size_name'] for item in combined_plot_data]
-            
-            # Adjust figure height for Q2 (many models) - increase spacing
-            if analysis_key == 'subjects_within_models' and len(names) > 8:
-                # Increase y-axis spacing for crowded plots
-                ax.set_ylim(-0.5, len(names) - 0.5)
-            
-            # Create horizontal bar plot
-            bar_colors = [colors[status] for status in statuses]
-            
-            bars = ax.barh(range(len(names)), neg_log_p_values, 
-                          color=bar_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
-            
-            # Calculate appropriate x-axis limits BEFORE adding annotations
-            data_values = [x for x in neg_log_p_values if x > 0.1]  # Exclude training bars
-            if data_values:
-                max_data_val = max(data_values)
-                x_max = min(max_data_val * 1.3, 50)  # 30% padding, cap at 50
-            else:
-                x_max = 5
-            
-            # Ensure minimum reasonable range
-            if x_max < 3:
-                x_max = 5
-            
-            ax.set_xlim(0, x_max)
-            
-            # Add significance threshold line
-            alpha_line = -np.log10(analyzer.alpha_per_family)
-            if alpha_line <= x_max:
-                ax.axvline(x=alpha_line, color='red', linestyle='--', linewidth=2,
-                          label=f'α = {analyzer.alpha_per_family:.4f}')
-            
-            # Add effect size annotations with proper positioning
-            for i, (bar, effect, effect_name, item) in enumerate(zip(bars, effect_sizes, effect_size_names, combined_plot_data)):
-                if item['status'] in ['significant', 'not_significant'] and effect > 0:
-                    # Position annotation based on bar width and plot limits
-                    bar_end = bar.get_width()
-                    text_x = min(bar_end + x_max * 0.02, x_max * 0.95)  # 2% padding or 95% of plot width
-                    
-                    # Create effect size label with name
-                    if effect_name:
-                        effect_label = f"{effect_name}={effect:.3f}"
-                    else:
-                        effect_label = f"ES={effect:.3f}"
-                    
-                    ax.text(text_x, bar.get_y() + bar.get_height()/2,
-                           effect_label, 
-                           va='center', fontsize=8, fontweight='bold',
-                           bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
-                           
-                elif item['status'] == 'pending':
-                    # Position training text better
-                    text_x = x_max * 0.3  # Place at 30% of plot width
-                    ax.text(text_x, bar.get_y() + bar.get_height()/2,
-                           'Training...', 
-                           va='center', ha='center', fontsize=8, style='italic', color='orange',
-                           bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
-            
-            # Formatting
-            ax.set_yticks(range(len(names)))
-            ax.set_yticklabels(names, fontsize=9)
-            ax.set_xlabel('-log₁₀(p-value)', fontsize=11)
-            ax.set_title(analysis_title, fontsize=12, fontweight='bold')
-            
-            # Create meaningful x-ticks based on the range
-            if x_max <= 5:
-                x_ticks = [0, 1, 2, 3, 4, 5]
-                x_labels = ['1.0', '0.1', '0.01', '0.001', '0.0001', '0.00001']
-            elif x_max <= 10:
-                x_ticks = [0, 2, 4, 6, 8, 10]
-                x_labels = ['1.0', '0.01', '0.0001', '1e-6', '1e-8', '1e-10']
-            elif x_max <= 20:
-                x_ticks = [0, 5, 10, 15, 20]
-                x_labels = ['1.0', '1e-5', '1e-10', '1e-15', '1e-20']
-            else:
-                x_ticks = [0, 10, 20, 30, 40, 50]
-                x_labels = ['1.0', '1e-10', '1e-20', '1e-30', '1e-40', '1e-50']
-            
-            # Only show ticks that are within our range
-            valid_ticks = [tick for tick in x_ticks if tick <= x_max]
-            valid_labels = [x_labels[i] for i, tick in enumerate(x_ticks) if tick <= x_max]
-            
-            ax.set_xticks(valid_ticks)
-            ax.set_xticklabels(valid_labels, fontsize=9)
-            
-            # Add legend in upper right corner for plots with significance threshold
-            if alpha_line <= x_max and any(item['status'] in ['significant', 'not_significant'] for item in combined_plot_data):
-                ax.legend(loc='upper right', fontsize=9, framealpha=0.9)
-            
-            ax.grid(axis='x', alpha=0.3)
-            
-        else:
-            # No data available
-            ax.text(0.5, 0.5, 'No data available\n(Training in progress)', 
-                   ha='center', va='center', transform=ax.transAxes, 
-                   fontsize=12, style='italic')
-            ax.set_title(analysis_title, fontsize=12, fontweight='bold')
-            ax.set_xlim(0, 5)
-            ax.set_ylim(0, 1)
-            ax.set_xticks([0, 1, 2, 3, 4, 5])
-            ax.set_xticklabels(['1.0', '0.1', '0.01', '0.001', '0.0001', '0.00001'])
-    
-    # Add overall title
-    fig.suptitle('EEG Model Performance Analysis - Statistical Results\n' + 
-                f'Family-wise α = {analyzer.base_alpha}, Per-family α = {analyzer.alpha_per_family:.4f}, Post-hoc: FDR',
-                fontsize=16, fontweight='bold', y=0.96)
-    
-    # Create custom legend at bottom
-    legend_elements = [
-        plt.Rectangle((0,0),1,1, facecolor=colors['significant'], label='Significant'),
-        plt.Rectangle((0,0),1,1, facecolor=colors['not_significant'], label='Not Significant'),
-        plt.Rectangle((0,0),1,1, facecolor=colors['pending'], label='Training in Progress'),
-        plt.Rectangle((0,0),1,1, facecolor=colors['no_data'], label='No Data')
-    ]
-    
-    fig.legend(handles=legend_elements, loc='lower center', ncol=4, 
-              bbox_to_anchor=(0.5, 0.02), fontsize=11)
-    
-    # Add explanation text
-    explanation_text = (
-        'X-axis: -log₁₀(p-value) - Higher bars = more significant results\n'
-        'Effect sizes: η² = eta-squared, W = Kendall\'s W, r = rank-biserial correlation\n'
-        'Interpretation: <0.1=negligible, 0.1-0.3=small, 0.3-0.5=medium, >0.5=large'
-    )
-    
-    fig.text(0.02, 0.08, explanation_text, fontsize=10, style='italic',
-             bbox=dict(boxstyle="round,pad=0.5", facecolor='lightgray', alpha=0.8))
-    
-    plt.tight_layout()
-    plt.subplots_adjust(bottom=0.15, top=0.92)
-    
-    if output_path:
-        plt.savefig(os.path.join(output_path, 'rigorous_eeg_analysis_horizontal_final.png'),
-                   dpi=300, bbox_inches='tight', facecolor='white')
-        plt.savefig(os.path.join(output_path, 'rigorous_eeg_analysis_horizontal_final.pdf'),
-                   bbox_inches='tight', facecolor='white')
-    
-    plt.show()
-    return fig
-
-def print_final_summary(analyzer):
-    """Print publication-ready summary of results"""
-    print("\n" + "="*80)
-    print("📊 PUBLICATION-READY SUMMARY")
-    print("="*80)
-    
-    print(f"Statistical Framework:")
-    print(f"  • Family-wise error rate: α = {analyzer.base_alpha}")
-    print(f"  • Number of research question families: {analyzer.n_questions}")
-    print(f"  • Bonferroni-corrected α per family: {analyzer.alpha_per_family:.4f}")
-    print(f"  • Post-hoc correction: False Discovery Rate (Benjamini-Hochberg)")
-    print(f"  • Effect size measures: Context-appropriate (Kendall's W, η², rank-biserial r)")
-    
-    for metric in ['balanced_accuracy', 'f1_score']:
-        print(f"\n{metric.upper().replace('_', ' ')} RESULTS:")
-        
-        for analysis_type, analysis_name in [
-            ('models_within_subjects', 'Q1: Model Comparison within Subject Types'),
-            ('subjects_within_models', 'Q2: Subject Type Effects within Models'),
-            ('model_families', 'Q3: Model Family Comparison'),
-            ('cluster_effects', 'Q4: Cluster Size Effects'),
-            ('architecture_effects', 'Q5: Architecture Effects')
-        ]:
-            
-            if analysis_type in analyzer.results[metric]:
-                results = analyzer.results[metric][analysis_type]
-                
-                significant_count = 0
-                total_count = 0
-                pending_count = 0
-                
-                for key, result in results.items():
-                    if isinstance(result, dict):
-                        if result.get('success', False):
-                            total_count += 1
-                            if result.get('p_value', 1) < analyzer.alpha_per_family:
-                                significant_count += 1
-                        elif 'insufficient' in result.get('reason', '') or 'training' in result.get('reason', ''):
-                            pending_count += 1
-                
-                status = ""
-                if total_count > 0:
-                    status += f"{significant_count}/{total_count} significant"
-                if pending_count > 0:
-                    status += f", {pending_count} pending training"
-                if not status:
-                    status = "No data"
-                
-                print(f"  {analysis_name}: {status}")
-    
-    print(f"\n💡 Training Recommendations:")
-    print(f"  • Priority: Train MSN/DSN models for independent/adaptive subjects")
-    print(f"  • This will enable cross-subject analysis for all model families")
-    print(f"  • Full architectural analysis requires complete training matrix")
-
-def run_rigorous_eeg_analysis(df, output_path=None, base_alpha=0.05):
+def filter_models_by_focus(df, focus_on=None):
     """
-    Run statistically rigorous EEG model analysis
+    Filter DataFrame based on focus parameter(s)
     
     Args:
-        df: DataFrame with model results
-        output_path: Optional path to save results
-        base_alpha: Base significance level (default: 0.05)
+        df: DataFrame with results
+        focus_on: str, list of str, or None. Options:
+            - 'c5': Only cluster size 5 models (+ DCN)
+            - 'c12': Only cluster size 12 models (+ DCN)
+            - 'embedded': Only embedded models (+ DCN)
+            - 'not_embedded': Only non-embedded models (+ DCN)
+            - 'multiscale': Only multiscale models (+ DCN)
+            - 'not_multiscale': Only non-multiscale models (+ DCN)
+            - List: Multiple filters combined with AND logic
+            - None: All models
     
     Returns:
-        dict: Complete analysis results with proper corrections
+        Filtered DataFrame
+    """
+    if focus_on is None:
+        return df.copy()
+    
+    # Convert single string to list for uniform processing
+    if isinstance(focus_on, str):
+        focus_list = [focus_on]
+    else:
+        focus_list = focus_on
+    
+    # Always keep DCN
+    dcn_mask = df['model_name'] == 'dcn'
+    
+    # Start with all True for MSN/DSN models, then apply filters with AND logic
+    msn_dsn_mask = df['model_name'] != 'dcn'  # Start with all non-DCN models
+    
+    for focus in focus_list:
+        if focus == 'c5':
+            filter_mask = df['cluster_size'] == 5
+        elif focus == 'c12':
+            filter_mask = df['cluster_size'] == 12
+        elif focus == 'embedded':
+            filter_mask = df['model_name'].str.contains('embedded', na=False)
+        elif focus == 'not_embedded':
+            filter_mask = ~df['model_name'].str.contains('embedded', na=False)
+        elif focus == 'multiscale':
+            filter_mask = df['model_name'].str.contains('multiscale', na=False)
+        elif focus == 'not_multiscale':
+            filter_mask = ~df['model_name'].str.contains('multiscale', na=False)
+        else:
+            raise ValueError(f"Invalid focus_on value: {focus}. "
+                            f"Valid options: 'c5', 'c12', 'embedded', 'not_embedded', "
+                            f"'multiscale', 'not_multiscale'")
+        
+        # Apply this filter to MSN/DSN models only (AND logic)
+        msn_dsn_mask = msn_dsn_mask & filter_mask
+    
+    # Combine DCN mask with filtered MSN/DSN mask
+    final_mask = dcn_mask | msn_dsn_mask
+    
+    return df[final_mask].copy()
+
+def plot_subjects_comparison(df, metric='Balanced Accuracy', plot_type='line', 
+                           focus_on=None, plot_style=None, save_path=None):
+    """
+    Create line or scatter plots showing all models across all 50 subjects
+    
+    Args:
+        df: DataFrame with results
+        metric: 'Balanced Accuracy' or 'F1 Macro'
+        plot_type: 'line' or 'scatter'
+        focus_on: str, list of str, or None - filter models. Options:
+                 'c5', 'c12', 'embedded', 'not_embedded', 'multiscale', 'not_multiscale'
+                 Can be single string or list for multiple filters (AND logic)
+        plot_style: dict, plotting style parameters (uses DEFAULT_PLOT_STYLE if None)
+        save_path: Optional path to save the plot
+        
+    Returns:
+        matplotlib figure
     """
     
-    print("📊 Preparing EEG model data for rigorous statistical analysis...")
-    analysis_data = prepare_analysis_data(df)
+    # Use default style if none provided
+    if plot_style is None:
+        plot_style = DEFAULT_PLOT_STYLE
     
-    print(f"✅ Prepared {len(analysis_data)} observations")
-    print(f"📈 Subjects: {len(analysis_data['subject_id'].unique())}")
-    print(f"🧠 Subject types: {analysis_data['subject_type'].unique()}")
-    print(f"🤖 Models: {len(analysis_data['model_short'].unique())}")
+    # Filter models based on focus
+    filtered_df = filter_models_by_focus(df, focus_on)
     
-    # Initialize rigorous analyzer
-    analyzer = RigorousEEGAnalyzer(analysis_data, base_alpha=base_alpha)
-    
-    # Run comprehensive analysis
-    results = analyzer.run_comprehensive_analysis()
-    
-    # Create horizontal visualizations
-    print("\n📊 Creating comprehensive horizontal plots...")
-    fig = create_comprehensive_horizontal_plots(analyzer, output_path)
-    
-    # Print final summary
-    print_final_summary(analyzer)
-    
-    if output_path:
-        # Save detailed results
-        import pickle
-        results_package = {
-            'results': results,
-            'analyzer_settings': {
-                'base_alpha': base_alpha,
-                'alpha_per_family': analyzer.alpha_per_family,
-                'n_questions': analyzer.n_questions,
-                'correction_method': 'Bonferroni (family-wise) + FDR (post-hoc)'
-            },
-            'data_summary': {
-                'n_observations': len(analysis_data),
-                'n_subjects': len(analysis_data['subject_id'].unique()),
-                'subject_types': list(analysis_data['subject_type'].unique()),
-                'n_models': len(analysis_data['model_short'].unique()),
-                'models': list(analysis_data['model_short'].unique())
-            }
+    # Model name mapping (same as violin plot)
+    def get_model_short_name(row):
+        model_mapping = {
+            'dcn': 'DCN',
+            'msn': 'MSN',
+            'msn_embedded': 'MSN(emb)',
+            'multiscale_msn': 'MSN(multi)',
+            'multiscale_msn_embedded': 'MSN(multi+emb)',
+            'dsn_msn': 'DSN',
+            'dsn_msn_embedded': 'DSN(emb)',
+            'dsn_multiscale_msn': 'DSN(multi)',
+            'dsn_multiscale_msn_embedded': 'DSN(multi+emb)'
         }
         
-        with open(os.path.join(output_path, 'rigorous_eeg_analysis_complete.pkl'), 'wb') as f:
-            pickle.dump(results_package, f)
+        base_name = model_mapping.get(row['model_name'], row['model_name'])
         
-        # Save summary tables
-        summary_data = []
-        for metric in ['balanced_accuracy', 'f1_score']:
-            for analysis_type, analysis_results in results[metric].items():
-                for key, result in analysis_results.items():
-                    if isinstance(result, dict) and result.get('success', False):
-                        summary_data.append({
-                            'Metric': metric,
-                            'Analysis': analysis_type,
-                            'Comparison': key,
-                            'Test': result.get('test_type', 'Unknown'),
-                            'Statistic': result.get('statistic', np.nan),
-                            'P_Value': result.get('p_value', np.nan),
-                            'Alpha_Used': result.get('alpha_used', analyzer.alpha_per_family),
-                            'Significant': result.get('p_value', 1) < result.get('alpha_used', analyzer.alpha_per_family),
-                            'Effect_Size': result.get('effect_size', np.nan),
-                            'Effect_Size_Name': result.get('effect_size_name', ''),
-                            'Effect_Interpretation': result.get('effect_interpretation', ''),
-                            'N_Groups': result.get('n_groups', np.nan)
-                        })
-        
-        if summary_data:
-            summary_df = pd.DataFrame(summary_data)
-            summary_df.to_csv(os.path.join(output_path, 'rigorous_analysis_summary.csv'), index=False)
-        
-        print(f"\n💾 Complete results saved to {output_path}")
+        # Add cluster info for non-DCN models
+        if row['model_name'] != 'dcn':
+            return f"{base_name}_C{row['cluster_size']}"
+        else:
+            return base_name
     
-    return {
-        'results': results,
-        'analyzer': analyzer,
-        'figure': fig,
-        'data': analysis_data
-    }
+    # Get color mappings (same as violin plot)
+    color_dict = get_model_colors(filtered_df)
+    
+    # Prepare data - expand all individual subject scores
+    plot_data = []
+    
+    for _, row in filtered_df.iterrows():
+        model_short = get_model_short_name(row)
+        model_key = get_model_key(row)
+        
+        # Choose the right score column based on metric
+        if metric == 'Balanced Accuracy':
+            all_scores = row['test_bal_acc_all']
+        else:  # F1 Macro
+            all_scores = row['test_f1_all']
+        
+        # Add each subject's score as a separate data point
+        for subject_idx, score in enumerate(all_scores):
+            plot_data.append({
+                'subject_type': row['subject_type'],
+                'model': model_short,
+                'model_key': model_key,
+                'subject_id': subject_idx + 1,  # 1-indexed subjects
+                'score': score
+            })
+    
+    plot_df = pd.DataFrame(plot_data)
+    
+    # Create focus suffix for title
+    if focus_on:
+        if isinstance(focus_on, list):
+            focus_suffix = f" (Focus: {', '.join(focus_on)})"
+        else:
+            focus_suffix = f" (Focus: {focus_on})"
+    else:
+        focus_suffix = ""
+    
+    with sns.plotting_context(plot_style['figure']['context']):
+        # Create subplots: 2 rows x 3 cols
+        fig, axes = plt.subplots(2, 3, figsize=plot_style['figure']['figsize_2x3'])
+        fig.suptitle(f'All Subjects {metric} Comparison ({plot_type.title()} Plot){focus_suffix}', 
+                     fontsize=plot_style['figure']['suptitle_fontsize'], y=0.98)
+        
+        subject_types = ['dependent', 'independent', 'adaptive']
+        
+        # Row 0: By Subject Type
+        for col, subject_type in enumerate(subject_types):
+            ax = axes[0, col]
+            
+            # Filter data for this subject type
+            subject_data = plot_df[plot_df['subject_type'] == subject_type]
+            
+            if not subject_data.empty:
+                # Get unique models for this subject type
+                unique_models = subject_data['model'].unique()
+                
+                # Get colors for this subject type
+                subject_colors = color_dict.get(subject_type, {})
+                
+                for model in unique_models:
+                    model_data = subject_data[subject_data['model'] == model]
+                    if not model_data.empty:
+                        # Get model key for color
+                        model_key = model_data.iloc[0]['model_key']
+                        color = subject_colors.get(model_key, 'gray')
+                        
+                        # Sort by subject_id for proper line connection
+                        model_data_sorted = model_data.sort_values('subject_id')
+                        
+                        if plot_type == 'line':
+                            ax.plot(model_data_sorted['subject_id'], model_data_sorted['score'],
+                                   color=color, label=model, **plot_style['line'])
+                        else:  # scatter
+                            ax.scatter(model_data_sorted['subject_id'], model_data_sorted['score'],
+                                     color=color, label=model, **plot_style['scatter'])
+            
+            # Formatting
+            ax.set_ylim(0, 100)
+            ax.set_xlim(0.5, 50.5)
+            ax.set_title(f'{subject_type.title()} Models', 
+                        fontsize=plot_style['figure']['title_fontsize'], fontweight='bold')
+            ax.set_ylabel(f'{metric} (%)' if col == 0 else '')
+            ax.set_xlabel('Subject ID')
+            ax.grid(True, alpha=plot_style['figure']['grid_alpha'])
+            ax.legend(fontsize=plot_style['figure']['legend_fontsize'], loc='best')
+        
+        # Row 1: By Model Family
+        model_families = ['DCN', 'MSN', 'DSN']
+        
+        for col, model_family in enumerate(model_families):
+            ax = axes[1, col]
+            
+            # Filter data for this model family
+            if model_family == 'DCN':
+                family_data = plot_df[plot_df['model'] == 'DCN']
+            elif model_family == 'MSN':
+                family_data = plot_df[plot_df['model'].str.startswith('MSN')]
+            else:  # DSN
+                family_data = plot_df[plot_df['model'].str.startswith('DSN')]
+            
+            if not family_data.empty:
+                # Get unique models for this family
+                unique_models = family_data['model'].unique()
+                
+                for model in unique_models:
+                    model_data = family_data[family_data['model'] == model]
+                    if not model_data.empty:
+                        # Group by subject type to get appropriate colors
+                        for subject_type in subject_types:
+                            subject_model_data = model_data[model_data['subject_type'] == subject_type]
+                            if not subject_model_data.empty:
+                                # Get color for this subject type and model
+                                model_key = subject_model_data.iloc[0]['model_key']
+                                subject_colors = color_dict.get(subject_type, {})
+                                color = subject_colors.get(model_key, 'gray')
+                                
+                                # Sort by subject_id for proper line connection
+                                subject_model_sorted = subject_model_data.sort_values('subject_id')
+                                
+                                # Create label combining model and subject type
+                                label = f"{model} ({subject_type})"
+                                
+                                if plot_type == 'line':
+                                    ax.plot(subject_model_sorted['subject_id'], subject_model_sorted['score'],
+                                           color=color, label=label, **plot_style['line'])
+                                else:  # scatter
+                                    ax.scatter(subject_model_sorted['subject_id'], subject_model_sorted['score'],
+                                             color=color, label=label, **plot_style['scatter'])
+            
+            # Formatting
+            ax.set_ylim(0, 100)
+            ax.set_xlim(0.5, 50.5)
+            ax.set_title(f'{model_family} Models', 
+                        fontsize=plot_style['figure']['title_fontsize'], fontweight='bold')
+            ax.set_ylabel(f'{metric} (%)' if col == 0 else '')
+            ax.set_xlabel('Subject ID')
+            ax.grid(True, alpha=plot_style['figure']['grid_alpha'])
+            ax.legend(fontsize=plot_style['figure']['legend_fontsize'], loc='best')
+        
+        plt.tight_layout()
+        
+        if save_path:
+            if focus_on:
+                if isinstance(focus_on, list):
+                    focus_str = f"_{'_'.join(focus_on)}"
+                else:
+                    focus_str = f"_{focus_on}"
+            else:
+                focus_str = ""
+            plot_name = f'subjects_{plot_type}_{metric.lower().replace(" ", "_")}_comparison{focus_str}.png'
+            fig.savefig(os.path.join(save_path, plot_name), 
+                       dpi=300, bbox_inches='tight')
+            print(f"💾 Subjects {plot_type} plot saved to {save_path}")
+        
+        return fig
 
-# Example usage:
-# results = run_rigorous_eeg_analysis(df, output_path='./rigorous_analysis_results/')
+def plot_subjects_by_type_only(df, metric='Balanced Accuracy', plot_type='line', 
+                             focus_on=None, plot_style=None, save_path=None):
+    """
+    Create plots showing all models across all subjects, organized by subject type only
+    One subplot per subject type (3 subplots total)
+    
+    Args:
+        df: DataFrame with results
+        metric: 'Balanced Accuracy' or 'F1 Macro'
+        plot_type: 'line' or 'scatter'
+        focus_on: str, list of str, or None - filter models. Options:
+                 'c5', 'c12', 'embedded', 'not_embedded', 'multiscale', 'not_multiscale'
+                 Can be single string or list for multiple filters (AND logic)
+        plot_style: dict, plotting style parameters (uses DEFAULT_PLOT_STYLE if None)
+        save_path: Optional path to save the plot
+        
+    Returns:
+        matplotlib figure
+    """
+    
+    # Use default style if none provided
+    if plot_style is None:
+        plot_style = DEFAULT_PLOT_STYLE
+    
+    # Filter models based on focus
+    filtered_df = filter_models_by_focus(df, focus_on)
+    
+    # Model name mapping (same as violin plot)
+    def get_model_short_name(row):
+        model_mapping = {
+            'dcn': 'DCN',
+            'msn': 'MSN',
+            'msn_embedded': 'MSN(emb)',
+            'multiscale_msn': 'MSN(multi)',
+            'multiscale_msn_embedded': 'MSN(multi+emb)',
+            'dsn_msn': 'DSN',
+            'dsn_msn_embedded': 'DSN(emb)',
+            'dsn_multiscale_msn': 'DSN(multi)',
+            'dsn_multiscale_msn_embedded': 'DSN(multi+emb)'
+        }
+        
+        base_name = model_mapping.get(row['model_name'], row['model_name'])
+        
+        # Add cluster info for non-DCN models
+        if row['model_name'] != 'dcn':
+            return f"{base_name}_C{row['cluster_size']}"
+        else:
+            return base_name
+    
+    # Get color mappings (same as violin plot)
+    color_dict = get_model_colors(filtered_df)
+    
+    # Prepare data - expand all individual subject scores
+    plot_data = []
+    
+    for _, row in filtered_df.iterrows():
+        model_short = get_model_short_name(row)
+        model_key = get_model_key(row)
+        
+        # Choose the right score column based on metric
+        if metric == 'Balanced Accuracy':
+            all_scores = row['test_bal_acc_all']
+        else:  # F1 Macro
+            all_scores = row['test_f1_all']
+        
+        # Add each subject's score as a separate data point
+        for subject_idx, score in enumerate(all_scores):
+            plot_data.append({
+                'subject_type': row['subject_type'],
+                'model': model_short,
+                'model_key': model_key,
+                'subject_id': subject_idx + 1,  # 1-indexed subjects
+                'score': score
+            })
+    
+    plot_df = pd.DataFrame(plot_data)
+    
+    # Create focus suffix for title
+    if focus_on:
+        if isinstance(focus_on, list):
+            focus_suffix = f" (Focus: {', '.join(focus_on)})"
+        else:
+            focus_suffix = f" (Focus: {focus_on})"
+    else:
+        focus_suffix = ""
+    
+    with sns.plotting_context(plot_style['figure']['context']):
+        # Create subplots: 1 row x 3 cols (one per subject type)
+        fig, axes = plt.subplots(1, 3, figsize=plot_style['figure']['figsize_1x3'])
+        fig.suptitle(f'All Subjects {metric} Comparison by Subject Type ({plot_type.title()} Plot){focus_suffix}', 
+                     fontsize=plot_style['figure']['suptitle_fontsize'], y=0.98)
+        
+        subject_types = ['dependent', 'independent', 'adaptive']
+        
+        for col, subject_type in enumerate(subject_types):
+            ax = axes[col]
+            
+            # Filter data for this subject type
+            subject_data = plot_df[plot_df['subject_type'] == subject_type]
+            
+            if not subject_data.empty:
+                # Get unique models for this subject type
+                unique_models = subject_data['model'].unique()
+                
+                # Get colors for this subject type
+                subject_colors = color_dict.get(subject_type, {})
+                
+                for model in unique_models:
+                    model_data = subject_data[subject_data['model'] == model]
+                    if not model_data.empty:
+                        # Get model key for color
+                        model_key = model_data.iloc[0]['model_key']
+                        color = subject_colors.get(model_key, 'gray')
+                        
+                        # Sort by subject_id for proper line connection
+                        model_data_sorted = model_data.sort_values('subject_id')
+                        
+                        if plot_type == 'line':
+                            ax.plot(model_data_sorted['subject_id'], model_data_sorted['score'],
+                                   color=color, label=model, **plot_style['line'])
+                        else:  # scatter
+                            ax.scatter(model_data_sorted['subject_id'], model_data_sorted['score'],
+                                     color=color, label=model, **plot_style['scatter'])
+            
+            # Formatting
+            ax.set_ylim(0, 100)
+            ax.set_xlim(0.5, 50.5)
+            ax.set_title(f'{subject_type.title()} Models', 
+                        fontsize=plot_style['figure']['title_fontsize'], fontweight='bold')
+            ax.set_ylabel(f'{metric} (%)' if col == 0 else '')
+            ax.set_xlabel('Subject ID')
+            ax.grid(True, alpha=plot_style['figure']['grid_alpha'])
+            ax.legend(fontsize=plot_style['figure']['legend_fontsize'], loc='best')
+        
+        plt.tight_layout()
+        
+        if save_path:
+            if focus_on:
+                if isinstance(focus_on, list):
+                    focus_str = f"_{'_'.join(focus_on)}"
+                else:
+                    focus_str = f"_{focus_on}"
+            else:
+                focus_str = ""
+            plot_name = f'subjects_by_type_{plot_type}_{metric.lower().replace(" ", "_")}_comparison{focus_str}.png'
+            fig.savefig(os.path.join(save_path, plot_name), 
+                       dpi=300, bbox_inches='tight')
+            print(f"💾 Subjects by type {plot_type} plot saved to {save_path}")
+        
+        return fig
+
+# Convenience functions
+def plot_subjects_scatter_comparison(df, metric='Balanced Accuracy', focus_on=None, 
+                                   plot_style=None, save_path=None):
+    """Convenience function for scatter plots of all subjects"""
+    return plot_subjects_comparison(df, metric=metric, plot_type='scatter', 
+                                  focus_on=focus_on, plot_style=plot_style, save_path=save_path)
+
+def plot_subjects_line_comparison(df, metric='Balanced Accuracy', focus_on=None, 
+                                plot_style=None, save_path=None):
+    """Convenience function for line plots of all subjects"""
+    return plot_subjects_comparison(df, metric=metric, plot_type='line', 
+                                  focus_on=focus_on, plot_style=plot_style, save_path=save_path)
+
+def plot_subjects_by_type_scatter(df, metric='Balanced Accuracy', focus_on=None, 
+                                plot_style=None, save_path=None):
+    """Convenience function for scatter plots by subject type only"""
+    return plot_subjects_by_type_only(df, metric=metric, plot_type='scatter', 
+                                    focus_on=focus_on, plot_style=plot_style, save_path=save_path)
+
+def plot_subjects_by_type_line(df, metric='Balanced Accuracy', focus_on=None, 
+                             plot_style=None, save_path=None):
+    """Convenience function for line plots by subject type only"""
+    return plot_subjects_by_type_only(df, metric=metric, plot_type='line', 
+                                    focus_on=focus_on, plot_style=plot_style, save_path=save_path)
+
+# ================================== Statistics =====================================
+"""
+my_stats_functions.py
+Comprehensive statistical analysis functions for ML model comparison
+Author: Your Name
+Date: 2025
+
+This module provides functions for:
+1. Cluster size comparison (5 vs 12)
+2. Encoding type comparison (one-hot vs embedded) for dependent models
+3. Kernel scale comparison (single vs multiscale)
+
+Each analysis includes ANOVA, effect sizes, and model-specific pairwise comparisons.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+from scipy.stats import f_oneway, ttest_ind
+from itertools import combinations
+import warnings
+warnings.filterwarnings('ignore')
+
+# Set plotting style
+plt.style.use('seaborn-v0_8')
+sns.set_palette("husl")
+
+def calculate_cohens_d(group1, group2):
+    """
+    Calculate Cohen's d effect size between two groups
+    
+    Parameters:
+    -----------
+    group1, group2 : array-like
+        Data for comparison groups
+    
+    Returns:
+    --------
+    cohens_d : float
+        Cohen's d effect size
+    interpretation : str
+        Interpretation of effect size magnitude
+    """
+    pooled_std = np.sqrt(((len(group1) - 1) * np.var(group1, ddof=1) + 
+                         (len(group2) - 1) * np.var(group2, ddof=1)) / 
+                        (len(group1) + len(group2) - 2))
+    
+    if pooled_std == 0:
+        return 0, "No effect"
+    
+    cohens_d = (np.mean(group1) - np.mean(group2)) / pooled_std
+    
+    # Interpretation for Cohen's d
+    abs_effect = abs(cohens_d)
+    if abs_effect < 0.2:
+        interpretation = "Negligible"
+    elif abs_effect < 0.5:
+        interpretation = "Small"
+    elif abs_effect < 0.8:
+        interpretation = "Medium"
+    else:
+        interpretation = "Large"
+        
+    return cohens_d, interpretation
+
+def calculate_eta_squared(groups_data):
+    """
+    Calculate eta squared (effect size for ANOVA)
+    
+    Parameters:
+    -----------
+    groups_data : list of arrays
+        List containing data for each group
+    
+    Returns:
+    --------
+    eta_squared : float
+        Eta squared effect size
+    interpretation : str
+        Interpretation of effect size
+    """
+    all_data = np.concatenate(groups_data)
+    grand_mean = np.mean(all_data)
+    
+    ss_between = sum(len(group) * (np.mean(group) - grand_mean)**2 for group in groups_data)
+    ss_total = np.sum((all_data - grand_mean)**2)
+    
+    if ss_total == 0:
+        return 0, "No effect"
+        
+    eta_squared = ss_between / ss_total
+    
+    # Interpretation for eta squared
+    if eta_squared < 0.01:
+        interpretation = "Negligible"
+    elif eta_squared < 0.06:
+        interpretation = "Small"
+    elif eta_squared < 0.14:
+        interpretation = "Medium"
+    else:
+        interpretation = "Large"
+    
+    return eta_squared, interpretation
+
+def perform_anova_analysis(data, dv_col, iv_col):
+    """
+    Perform one-way ANOVA analysis
+    
+    Parameters:
+    -----------
+    data : pd.DataFrame
+        Data containing dependent and independent variables
+    dv_col : str
+        Column name for dependent variable (performance metric)
+    iv_col : str
+        Column name for independent variable (factor to test)
+    
+    Returns:
+    --------
+    results : dict
+        Dictionary containing ANOVA results and effect sizes
+    """
+    # Remove any missing values
+    clean_data = data[[dv_col, iv_col]].dropna()
+    
+    if len(clean_data) == 0:
+        return {"error": "No valid data for analysis"}
+    
+    # Get unique groups
+    groups = clean_data[iv_col].unique()
+    
+    if len(groups) < 2:
+        return {"error": "Need at least 2 groups for comparison"}
+    
+    # Prepare data for analysis
+    group_data = [clean_data[clean_data[iv_col] == group][dv_col].values 
+                  for group in groups]
+    
+    # Perform one-way ANOVA
+    f_stat, p_value = f_oneway(*group_data)
+    
+    # Calculate eta squared
+    eta_squared, eta_interpretation = calculate_eta_squared(group_data)
+    
+    # Calculate descriptive statistics
+    descriptives = clean_data.groupby(iv_col)[dv_col].agg([
+        'count', 'mean', 'std', 'min', 'max'
+    ]).round(4)
+    
+    results = {
+        'f_statistic': f_stat,
+        'p_value': p_value,
+        'eta_squared': eta_squared,
+        'eta_interpretation': eta_interpretation,
+        'significant': p_value < 0.05,
+        'groups': groups,
+        'descriptives': descriptives,
+        'n_total': len(clean_data),
+        'dv_col': dv_col,
+        'iv_col': iv_col
+    }
+    
+    return results
+
+def perform_model_specific_pairwise_comparisons(data, dv_col, comparison_type='cluster', alpha=0.05):
+    """
+    Perform model-specific pairwise comparisons based on comparison type
+    
+    Parameters:
+    -----------
+    data : pd.DataFrame
+        Data for analysis
+    dv_col : str
+        Dependent variable column
+    comparison_type : str
+        Type of comparison ('cluster', 'embedding', 'scale')
+    alpha : float
+        Significance level
+    
+    Returns:
+    --------
+    comparisons : pd.DataFrame
+        DataFrame with model-specific pairwise comparison results
+    """
+    comparisons = []
+    
+    if comparison_type == 'cluster':
+        # Compare same models with different cluster sizes: msn_c5 vs msn_c12, etc.
+        model_bases = set()
+        for model_name in data['model_name'].unique():
+            if 'dcn' not in model_name.lower():
+                # Remove cluster size suffix to get base model
+                base_model = model_name.replace('_c5', '').replace('_c12', '')
+                model_bases.add(base_model)
+        
+        for base_model in model_bases:
+            # Get models with cluster 5 and 12 for this base model
+            model_c5_data = data[(data['model_name'].str.contains(base_model, case=False, regex=False)) & 
+                               (data['cluster_size'] == 5)]
+            model_c12_data = data[(data['model_name'].str.contains(base_model, case=False, regex=False)) & 
+                                (data['cluster_size'] == 12)]
+            
+            if len(model_c5_data) > 0 and len(model_c12_data) > 0:
+                data1 = model_c5_data[dv_col].values
+                data2 = model_c12_data[dv_col].values
+                
+                # Get actual model names
+                model_c5_name = model_c5_data['model_id'].iloc[0]
+                model_c12_name = model_c12_data['model_id'].iloc[0]
+                
+                # Perform t-test
+                t_stat, p_val = ttest_ind(data1, data2)
+                
+                # Calculate Cohen's d
+                cohen_d, d_interpretation = calculate_cohens_d(data1, data2)
+                
+                # Calculate means and differences
+                mean1, mean2 = np.mean(data1), np.mean(data2)
+                mean_diff = mean1 - mean2
+                
+                comparisons.append({
+                    'group1': model_c5_name,
+                    'group2': model_c12_name,
+                    'mean1': mean1,
+                    'mean2': mean2,
+                    'mean_difference': mean_diff,
+                    't_statistic': t_stat,
+                    'p_value': p_val,
+                    'cohen_d': cohen_d,
+                    'effect_interpretation': d_interpretation,
+                    'n1': len(data1),
+                    'n2': len(data2)
+                })
+    
+    elif comparison_type == 'embedding':
+        # Compare embedded vs non-embedded for same base models: msn_c5 vs msn_embedded_c5, etc.
+        # Group by base model pattern and cluster size
+        grouped_models = {}
+        
+        for _, row in data.iterrows():
+            model_name = row['model_name']
+            cluster_size = row.get('cluster_size', 'N/A')
+            is_embedded = row['is_embedded']
+            
+            if 'dcn' in model_name.lower():
+                continue
+                
+            # Extract base model pattern
+            if 'embedded' in model_name:
+                base_pattern = model_name.replace('_embedded', '')
+            else:
+                base_pattern = model_name
+            
+            # Create grouping key
+            group_key = f"{base_pattern}_{cluster_size}"
+            
+            if group_key not in grouped_models:
+                grouped_models[group_key] = {'embedded': [], 'non_embedded': []}
+            
+            if is_embedded:
+                grouped_models[group_key]['embedded'].append(row)
+            else:
+                grouped_models[group_key]['non_embedded'].append(row)
+        
+        # Compare within each group
+        for group_key, group_data in grouped_models.items():
+            embedded_rows = group_data['embedded']
+            non_embedded_rows = group_data['non_embedded']
+            
+            if len(embedded_rows) > 0 and len(non_embedded_rows) > 0:
+                data1 = [row[dv_col] for row in non_embedded_rows]  # One-hot
+                data2 = [row[dv_col] for row in embedded_rows]      # Embedded
+                
+                # Get model names
+                model1_name = non_embedded_rows[0]['model_id'] + "_onehot"
+                model2_name = embedded_rows[0]['model_id'] + "_embedded"
+                
+                # Perform t-test
+                t_stat, p_val = ttest_ind(data1, data2)
+                
+                # Calculate Cohen's d
+                cohen_d, d_interpretation = calculate_cohens_d(data1, data2)
+                
+                # Calculate means and differences
+                mean1, mean2 = np.mean(data1), np.mean(data2)
+                mean_diff = mean1 - mean2
+                
+                comparisons.append({
+                    'group1': model1_name,
+                    'group2': model2_name,
+                    'mean1': mean1,
+                    'mean2': mean2,
+                    'mean_difference': mean_diff,
+                    't_statistic': t_stat,
+                    'p_value': p_val,
+                    'cohen_d': cohen_d,
+                    'effect_interpretation': d_interpretation,
+                    'n1': len(data1),
+                    'n2': len(data2)
+                })
+    
+    elif comparison_type == 'scale':
+        # Compare single-scale vs multiscale for same base models: msn_c5 vs multiscale_msn_c5, etc.
+        grouped_models = {}
+        
+        for _, row in data.iterrows():
+            model_name = row['model_name']
+            cluster_size = row.get('cluster_size', 'N/A')
+            
+            if 'dcn' in model_name.lower():
+                continue
+            
+            # Extract base model pattern
+            if 'multiscale' in model_name:
+                base_pattern = model_name.replace('multiscale_', '')
+                is_multiscale = True
+            else:
+                base_pattern = model_name
+                is_multiscale = False
+            
+            # Create grouping key
+            group_key = f"{base_pattern}_{cluster_size}_{row.get('is_embedded', False)}"
+            
+            if group_key not in grouped_models:
+                grouped_models[group_key] = {'single': [], 'multi': []}
+            
+            if is_multiscale:
+                grouped_models[group_key]['multi'].append(row)
+            else:
+                grouped_models[group_key]['single'].append(row)
+        
+        # Compare within each group
+        for group_key, group_data in grouped_models.items():
+            single_rows = group_data['single']
+            multi_rows = group_data['multi']
+            
+            if len(single_rows) > 0 and len(multi_rows) > 0:
+                data1 = [row[dv_col] for row in single_rows]   # Single-scale
+                data2 = [row[dv_col] for row in multi_rows]    # Multiscale
+                
+                # Get model names
+                model1_name = single_rows[0]['model_id']
+                model2_name = multi_rows[0]['model_id']
+                
+                # Perform t-test
+                t_stat, p_val = ttest_ind(data1, data2)
+                
+                # Calculate Cohen's d
+                cohen_d, d_interpretation = calculate_cohens_d(data1, data2)
+                
+                # Calculate means and differences
+                mean1, mean2 = np.mean(data1), np.mean(data2)
+                mean_diff = mean1 - mean2
+                
+                comparisons.append({
+                    'group1': model1_name,
+                    'group2': model2_name,
+                    'mean1': mean1,
+                    'mean2': mean2,
+                    'mean_difference': mean_diff,
+                    't_statistic': t_stat,
+                    'p_value': p_val,
+                    'cohen_d': cohen_d,
+                    'effect_interpretation': d_interpretation,
+                    'n1': len(data1),
+                    'n2': len(data2)
+                })
+    
+    if not comparisons:
+        return pd.DataFrame()
+    
+    comp_df = pd.DataFrame(comparisons)
+    
+    # Apply Bonferroni correction
+    comp_df['p_corrected'] = comp_df['p_value'] * len(comp_df)
+    comp_df['p_corrected'] = comp_df['p_corrected'].clip(upper=1.0)
+    
+    comp_df['significant_uncorrected'] = comp_df['p_value'] < alpha
+    comp_df['significant_corrected'] = comp_df['p_corrected'] < alpha
+    
+    return comp_df.round(4)
+
+def plot_anova_results(anova_results, data, dv_col, iv_col, title_prefix="", save_path=None):
+    """
+    Create horizontal visualization for ANOVA results
+    
+    Parameters:
+    -----------
+    anova_results : dict
+        Results from perform_anova_analysis
+    data : pd.DataFrame
+        Original data
+    dv_col : str
+        Dependent variable column
+    iv_col : str
+        Independent variable column
+    title_prefix : str
+        Prefix for plot title
+    save_path : str, optional
+        Full path (including filename) to save the plot
+    
+    Returns:
+    --------
+    fig : matplotlib.figure.Figure
+        Figure object containing the plots
+    """
+    clean_data = data[[dv_col, iv_col]].dropna()
+    
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    fig.suptitle(f'{title_prefix} ANOVA Results: {dv_col} by {iv_col}', 
+                 fontsize=16, fontweight='bold')
+    
+    # 1. Horizontal box plot
+    sns.boxplot(data=clean_data, y=iv_col, x=dv_col, ax=axes[0,0])
+    axes[0,0].set_title('Distribution by Group')
+    
+    # 2. Horizontal violin plot
+    sns.violinplot(data=clean_data, y=iv_col, x=dv_col, ax=axes[0,1])
+    axes[0,1].set_title('Density Distribution by Group')
+    
+    # 3. Horizontal bar plot with error bars
+    means = clean_data.groupby(iv_col)[dv_col].mean()
+    stds = clean_data.groupby(iv_col)[dv_col].std()
+    
+    y_pos = range(len(means))
+    bars = axes[1,0].barh(y_pos, means.values, xerr=stds.values, 
+                         capsize=5, alpha=0.7, color='skyblue', edgecolor='navy')
+    axes[1,0].set_yticks(y_pos)
+    axes[1,0].set_yticklabels(means.index)
+    axes[1,0].set_title('Means with Standard Deviation')
+    axes[1,0].set_xlabel(dv_col)
+    
+    # Add value labels on bars
+    for i, (bar, mean_val, std_val) in enumerate(zip(bars, means.values, stds.values)):
+        axes[1,0].text(bar.get_width() + std_val + max(means.values) * 0.01, 
+                      bar.get_y() + bar.get_height()/2, 
+                      f'{mean_val:.2f}±{std_val:.2f}', 
+                      ha='left', va='center', fontweight='bold')
+    
+    # 4. Results summary
+    axes[1,1].axis('off')
+    
+    # Create summary text
+    summary_text = f"""
+ANOVA Results Summary:
+
+F-statistic: {anova_results['f_statistic']:.4f}
+p-value: {anova_results['p_value']:.4f}
+Eta-squared: {anova_results['eta_squared']:.4f}
+Effect size: {anova_results['eta_interpretation']}
+
+Significance: {'Yes' if anova_results['significant'] else 'No'} (α = 0.05)
+
+Sample size: {anova_results['n_total']}
+Groups: {len(anova_results['groups'])}
+"""
+    
+    axes[1,1].text(0.1, 0.9, summary_text, transform=axes[1,1].transAxes,
+                   fontsize=12, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+    
+    plt.tight_layout()
+    
+    # Save plot if path provided
+    if save_path:
+        import os
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"📊 ANOVA plot saved to: {save_path}")
+    
+    return fig
+
+def plot_pairwise_comparisons(comparisons_df, title_prefix="", alpha=0.05, save_path=None):
+    """
+    Create horizontal visualization for pairwise comparisons
+    
+    Parameters:
+    -----------
+    comparisons_df : pd.DataFrame
+        Results from perform_model_specific_pairwise_comparisons
+    title_prefix : str
+        Prefix for plot title
+    alpha : float
+        Significance level
+    save_path : str, optional
+        Full path (including filename) to save the plot
+    
+    Returns:
+    --------
+    fig : matplotlib.figure.Figure
+        Figure object containing the plots
+    """
+    if len(comparisons_df) == 0:
+        print("No comparisons to plot")
+        return None
+    
+    fig, axes = plt.subplots(1, 2, figsize=(16, max(8, len(comparisons_df) * 0.8)))
+    fig.suptitle(f'{title_prefix} Model-Specific Pairwise Comparisons', fontsize=16, fontweight='bold')
+    
+    # Create comparison labels
+    comparisons_df['comparison'] = (comparisons_df['group1'].astype(str) + 
+                                   ' vs ' + 
+                                   comparisons_df['group2'].astype(str))
+    
+    # 1. Horizontal -log10(p-values) plot
+    neg_log_p_uncorrected = -np.log10(comparisons_df['p_value'])
+    neg_log_p_corrected = -np.log10(comparisons_df['p_corrected'])
+    
+    y_pos = range(len(comparisons_df))
+    
+    # Plot uncorrected p-values
+    bars1 = axes[0].barh([y - 0.2 for y in y_pos], neg_log_p_uncorrected, 
+                        height=0.4, label='Uncorrected', alpha=0.7, color='lightcoral')
+    
+    # Plot corrected p-values
+    bars2 = axes[0].barh([y + 0.2 for y in y_pos], neg_log_p_corrected, 
+                        height=0.4, label='Bonferroni Corrected', alpha=0.7, color='skyblue')
+    
+    # Add significance lines
+    axes[0].axvline(x=-np.log10(alpha), color='red', linestyle='--', 
+                   label=f'α = {alpha}', linewidth=2)
+    
+    axes[0].set_ylabel('Model Comparison')
+    axes[0].set_xlabel('-log₁₀(p-value)')
+    axes[0].set_title('Statistical Significance')
+    axes[0].set_yticks(y_pos)
+    axes[0].set_yticklabels(comparisons_df['comparison'])
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3, axis='x')
+    
+    # Add Cohen's d values on bars
+    for i, (bar1, bar2) in enumerate(zip(bars1, bars2)):
+        cohen_d = comparisons_df.iloc[i]['cohen_d']
+        axes[0].text(bar1.get_width() + 0.05, bar1.get_y() + bar1.get_height()/2,
+                    f'd={cohen_d:.2f}', ha='left', va='center', fontsize=9)
+    
+    # 2. Horizontal effect sizes plot
+    cohen_d_values = comparisons_df['cohen_d'].abs()
+    colors = ['green' if abs(d) >= 0.8 else 'orange' if abs(d) >= 0.5 else 'red' 
+              for d in comparisons_df['cohen_d']]
+    
+    bars3 = axes[1].barh(y_pos, cohen_d_values, color=colors, alpha=0.7)
+    
+    # Add effect size interpretation lines
+    axes[1].axvline(x=0.2, color='red', linestyle='--', alpha=0.7, label='Small (0.2)')
+    axes[1].axvline(x=0.5, color='orange', linestyle='--', alpha=0.7, label='Medium (0.5)')
+    axes[1].axvline(x=0.8, color='green', linestyle='--', alpha=0.7, label='Large (0.8)')
+    
+    axes[1].set_ylabel('Model Comparison')
+    axes[1].set_xlabel('|Cohen\'s d|')
+    axes[1].set_title('Effect Sizes')
+    axes[1].set_yticks(y_pos)
+    axes[1].set_yticklabels(comparisons_df['comparison'])
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3, axis='x')
+    
+    # Add effect size values on bars
+    for i, bar in enumerate(bars3):
+        effect_interp = comparisons_df.iloc[i]['effect_interpretation']
+        axes[1].text(bar.get_width() + 0.02, bar.get_y() + bar.get_height()/2,
+                    effect_interp, ha='left', va='center', fontsize=9)
+    
+    plt.tight_layout()
+    
+    # Save plot if path provided
+    if save_path:
+        import os
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"📊 Pairwise comparison plot saved to: {save_path}")
+    
+    return fig
+
+def cluster_comparison_analysis(df, metric='test_bal_acc_mean', subject_types=None, save_plots=False, plot_dir=None):
+    """
+    Compare cluster sizes (5 vs 12) across subject types with model-specific pairwise comparisons
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with model results
+    metric : str
+        Performance metric to analyze
+    subject_types : list, optional
+        Subject types to include (default: all)
+    save_plots : bool
+        Whether to save plots
+    plot_dir : str, optional
+        Directory path to save plots
+    
+    Returns:
+    --------
+    results : dict
+        Complete analysis results including ANOVA, comparisons, and recommendations
+    """
+    print("🔍 CLUSTER SIZE COMPARISON ANALYSIS (5 vs 12)")
+    print("=" * 60)
+    
+    # Filter data for models with cluster sizes
+    cluster_data = df[df['cluster_size'].notna()].copy()
+    
+    if subject_types:
+        cluster_data = cluster_data[cluster_data['subject_type'].isin(subject_types)]
+    
+    if len(cluster_data) == 0:
+        return {"error": "No data with cluster sizes found"}
+    
+    results = {}
+    
+    # Overall analysis
+    print(f"\n📊 Overall Analysis (All Subject Types)")
+    print("-" * 40)
+    
+    overall_anova = perform_anova_analysis(cluster_data, metric, 'cluster_size')
+    overall_comparisons = perform_model_specific_pairwise_comparisons(cluster_data, metric, 'cluster')
+    
+    results['overall'] = {
+        'anova': overall_anova,
+        'comparisons': overall_comparisons
+    }
+    
+    print(f"ANOVA: F={overall_anova['f_statistic']:.4f}, p={overall_anova['p_value']:.4f}")
+    print(f"Effect size (η²): {overall_anova['eta_squared']:.4f} ({overall_anova['eta_interpretation']})")
+    print(f"Significant: {'Yes' if overall_anova['significant'] else 'No'}")
+    
+    # Print model-specific comparisons
+    if len(overall_comparisons) > 0:
+        print(f"\nModel-Specific Comparisons:")
+        for _, row in overall_comparisons.iterrows():
+            sig_status = "✓" if row['significant_corrected'] else "✗"
+            print(f"  {sig_status} {row['group1']} vs {row['group2']}: "
+                  f"p={row['p_corrected']:.4f}, d={row['cohen_d']:.3f} ({row['effect_interpretation']})")
+    
+    # Analysis by subject type
+    results['by_subject_type'] = {}
+    
+    for subject_type in cluster_data['subject_type'].unique():
+        print(f"\n📈 Analysis for {subject_type.upper()}")
+        print("-" * 40)
+        
+        subset = cluster_data[cluster_data['subject_type'] == subject_type]
+        
+        if len(subset['cluster_size'].unique()) < 2:
+            print(f"  ⚠️ Only one cluster size available for {subject_type}")
+            continue
+        
+        anova_result = perform_anova_analysis(subset, metric, 'cluster_size')
+        comparisons_result = perform_model_specific_pairwise_comparisons(subset, metric, 'cluster')
+        
+        results['by_subject_type'][subject_type] = {
+            'anova': anova_result,
+            'comparisons': comparisons_result
+        }
+        
+        print(f"  ANOVA: F={anova_result['f_statistic']:.4f}, p={anova_result['p_value']:.4f}")
+        print(f"  Effect size (η²): {anova_result['eta_squared']:.4f} ({anova_result['eta_interpretation']})")
+        print(f"  Significant: {'Yes' if anova_result['significant'] else 'No'}")
+        
+        # Show means
+        means = subset.groupby('cluster_size')[metric].agg(['mean', 'std', 'count'])
+        print(f"  Descriptive statistics:")
+        for cluster_size in means.index:
+            mean_val = means.loc[cluster_size, 'mean']
+            std_val = means.loc[cluster_size, 'std']
+            n_val = means.loc[cluster_size, 'count']
+            print(f"    Cluster {cluster_size}: {mean_val:.2f} ± {std_val:.2f} (n={n_val})")
+    
+    # Generate recommendation
+    recommendation = generate_cluster_recommendation(results, metric)
+    results['recommendation'] = recommendation
+    
+    print(f"\n🏆 RECOMMENDATION")
+    print("-" * 40)
+    print(recommendation)
+    
+    # Generate plots if requested
+    if save_plots and plot_dir:
+        # ANOVA plot
+        anova_path = f"{plot_dir}/cluster_anova_{metric}.png"
+        fig1 = plot_anova_results(
+            overall_anova, cluster_data, metric, 'cluster_size',
+            f"Cluster Size Comparison - {metric}", save_path=anova_path
+        )
+        plt.close(fig1)
+        
+        # Pairwise comparison plot
+        if len(overall_comparisons) > 0:
+            pairwise_path = f"{plot_dir}/cluster_pairwise_{metric}.png"
+            fig2 = plot_pairwise_comparisons(
+                overall_comparisons, f"Cluster Size - {metric}", save_path=pairwise_path
+            )
+            plt.close(fig2)
+    
+    return results
+
+def embedding_comparison_analysis(df, metric='test_bal_acc_mean', save_plots=False, plot_dir=None):
+    """
+    Compare embedding vs one-hot encoding for dependent subject type only
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with model results
+    metric : str
+        Performance metric to analyze
+    save_plots : bool
+        Whether to save plots
+    plot_dir : str, optional
+        Directory path to save plots
+    
+    Returns:
+    --------
+    results : dict
+        Complete analysis results
+    """
+    print("🔗 EMBEDDING vs ONE-HOT COMPARISON ANALYSIS (Dependent Only)")
+    print("=" * 60)
+    
+    # Filter for dependent subject type only
+    dependent_data = df[df['subject_type'] == 'dependent'].copy()
+    
+    if len(dependent_data) == 0:
+        return {"error": "No dependent subject type data found"}
+    
+    # Check if we have both embedded and non-embedded models
+    embedding_types = dependent_data['is_embedded'].unique()
+    
+    if len(embedding_types) < 2:
+        return {"error": "Need both embedded and non-embedded models for comparison"}
+    
+    print(f"📊 Analyzing {len(dependent_data)} dependent models")
+    print(f"Embedding types available: {embedding_types}")
+    
+    # Create readable labels
+    dependent_data['encoding_type'] = dependent_data['is_embedded'].map({
+        True: 'Embedded', 
+        False: 'One-Hot'
+    })
+    
+    # Perform analysis
+    anova_result = perform_anova_analysis(dependent_data, metric, 'encoding_type')
+    comparisons_result = perform_model_specific_pairwise_comparisons(dependent_data, metric, 'embedding')
+    
+    results = {
+        'anova': anova_result,
+        'comparisons': comparisons_result,
+        'data_used': dependent_data
+    }
+    
+    print(f"\nANOVA Results:")
+    print(f"  F-statistic: {anova_result['f_statistic']:.4f}")
+    print(f"  p-value: {anova_result['p_value']:.4f}")
+    print(f"  Effect size (η²): {anova_result['eta_squared']:.4f} ({anova_result['eta_interpretation']})")
+    print(f"  Significant: {'Yes' if anova_result['significant'] else 'No'}")
+    
+    # Print model-specific comparisons
+    if len(comparisons_result) > 0:
+        print(f"\nModel-Specific Comparisons:")
+        for _, row in comparisons_result.iterrows():
+            sig_status = "✓" if row['significant_corrected'] else "✗"
+            print(f"  {sig_status} {row['group1']} vs {row['group2']}: "
+                  f"p={row['p_corrected']:.4f}, d={row['cohen_d']:.3f} ({row['effect_interpretation']})")
+    
+    # Show descriptive statistics
+    print(f"\nDescriptive Statistics:")
+    means = dependent_data.groupby('encoding_type')[metric].agg(['mean', 'std', 'count'])
+    for encoding_type in means.index:
+        mean_val = means.loc[encoding_type, 'mean']
+        std_val = means.loc[encoding_type, 'std']
+        n_val = means.loc[encoding_type, 'count']
+        print(f"  {encoding_type}: {mean_val:.2f} ± {std_val:.2f} (n={n_val})")
+    
+    # Generate recommendation
+    recommendation = generate_embedding_recommendation(results, metric)
+    results['recommendation'] = recommendation
+    
+    print(f"\n🏆 RECOMMENDATION")
+    print("-" * 40)
+    print(recommendation)
+    
+    # Generate plots if requested
+    if save_plots and plot_dir:
+        # ANOVA plot
+        anova_path = f"{plot_dir}/encoding_anova_{metric}.png"
+        fig1 = plot_anova_results(
+            anova_result, dependent_data, metric, 'encoding_type',
+            f"Encoding Type Comparison - {metric}", save_path=anova_path
+        )
+        plt.close(fig1)
+        
+        # Pairwise comparison plot
+        if len(comparisons_result) > 0:
+            pairwise_path = f"{plot_dir}/encoding_pairwise_{metric}.png"
+            fig2 = plot_pairwise_comparisons(
+                comparisons_result, f"Encoding Type - {metric}", save_path=pairwise_path
+            )
+            plt.close(fig2)
+    
+    return results
+
+def kernel_scale_comparison_analysis(df, metric='test_bal_acc_mean', subject_types=None, save_plots=False, plot_dir=None):
+    """
+    Compare single-scale vs multiscale models
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with model results
+    metric : str
+        Performance metric to analyze
+    subject_types : list, optional
+        Subject types to include
+    save_plots : bool
+        Whether to save plots
+    plot_dir : str, optional
+        Directory path to save plots
+    
+    Returns:
+    --------
+    results : dict
+        Complete analysis results
+    """
+    print("📏 KERNEL SCALE COMPARISON ANALYSIS (Single vs Multiscale)")
+    print("=" * 60)
+    
+    # Create scale type column
+    df_analysis = df.copy()
+    df_analysis['scale_type'] = df_analysis['model_name'].apply(
+        lambda x: 'Multiscale' if 'multiscale' in x.lower() else 'Single-scale'
+    )
+    
+    # Filter for MSN and DSN models only (exclude DCN)
+    scale_data = df_analysis[~df_analysis['model_name'].str.contains('dcn', case=False)].copy()
+    
+    if subject_types:
+        scale_data = scale_data[scale_data['subject_type'].isin(subject_types)]
+    
+    if len(scale_data) == 0:
+        return {"error": "No MSN/DSN models found for scale comparison"}
+    
+    # Check if we have both scale types
+    scale_types = scale_data['scale_type'].unique()
+    
+    if len(scale_types) < 2:
+        return {"error": "Need both single-scale and multiscale models for comparison"}
+    
+    results = {}
+    
+    # Overall analysis
+    print(f"\n📊 Overall Analysis (All Subject Types)")
+    print("-" * 40)
+    
+    overall_anova = perform_anova_analysis(scale_data, metric, 'scale_type')
+    overall_comparisons = perform_model_specific_pairwise_comparisons(scale_data, metric, 'scale')
+    
+    results['overall'] = {
+        'anova': overall_anova,
+        'comparisons': overall_comparisons
+    }
+    
+    print(f"ANOVA: F={overall_anova['f_statistic']:.4f}, p={overall_anova['p_value']:.4f}")
+    print(f"Effect size (η²): {overall_anova['eta_squared']:.4f} ({overall_anova['eta_interpretation']})")
+    print(f"Significant: {'Yes' if overall_anova['significant'] else 'No'}")
+    
+    # Print model-specific comparisons
+    if len(overall_comparisons) > 0:
+        print(f"\nModel-Specific Comparisons:")
+        for _, row in overall_comparisons.iterrows():
+            sig_status = "✓" if row['significant_corrected'] else "✗"
+            print(f"  {sig_status} {row['group1']} vs {row['group2']}: "
+                  f"p={row['p_corrected']:.4f}, d={row['cohen_d']:.3f} ({row['effect_interpretation']})")
+    
+    # Analysis by subject type
+    results['by_subject_type'] = {}
+    
+    for subject_type in scale_data['subject_type'].unique():
+        print(f"\n📈 Analysis for {subject_type.upper()}")
+        print("-" * 40)
+        
+        subset = scale_data[scale_data['subject_type'] == subject_type]
+        
+        if len(subset['scale_type'].unique()) < 2:
+            print(f"  ⚠️ Only one scale type available for {subject_type}")
+            continue
+        
+        anova_result = perform_anova_analysis(subset, metric, 'scale_type')
+        comparisons_result = perform_model_specific_pairwise_comparisons(subset, metric, 'scale')
+        
+        results['by_subject_type'][subject_type] = {
+            'anova': anova_result,
+            'comparisons': comparisons_result
+        }
+        
+        print(f"  ANOVA: F={anova_result['f_statistic']:.4f}, p={anova_result['p_value']:.4f}")
+        print(f"  Effect size (η²): {anova_result['eta_squared']:.4f} ({anova_result['eta_interpretation']})")
+        print(f"  Significant: {'Yes' if anova_result['significant'] else 'No'}")
+        
+        # Show means
+        means = subset.groupby('scale_type')[metric].agg(['mean', 'std', 'count'])
+        print(f"  Descriptive statistics:")
+        for scale_type in means.index:
+            mean_val = means.loc[scale_type, 'mean']
+            std_val = means.loc[scale_type, 'std']
+            n_val = means.loc[scale_type, 'count']
+            print(f"    {scale_type}: {mean_val:.2f} ± {std_val:.2f} (n={n_val})")
+    
+    # Generate recommendation
+    recommendation = generate_scale_recommendation(results, metric)
+    results['recommendation'] = recommendation
+    
+    print(f"\n🏆 RECOMMENDATION")
+    print("-" * 40)
+    print(recommendation)
+    
+    # Generate plots if requested
+    if save_plots and plot_dir:
+        # ANOVA plot
+        anova_path = f"{plot_dir}/scale_anova_{metric}.png"
+        fig1 = plot_anova_results(
+            overall_anova, scale_data, metric, 'scale_type',
+            f"Kernel Scale Comparison - {metric}", save_path=anova_path
+        )
+        plt.close(fig1)
+        
+        # Pairwise comparison plot
+        if len(overall_comparisons) > 0:
+            pairwise_path = f"{plot_dir}/scale_pairwise_{metric}.png"
+            fig2 = plot_pairwise_comparisons(
+                overall_comparisons, f"Kernel Scale - {metric}", save_path=pairwise_path
+            )
+            plt.close(fig2)
+    
+    return results
+
+def generate_cluster_recommendation(results, metric):
+    """Generate recommendation for cluster size comparison"""
+    
+    overall_significant = results['overall']['anova']['significant']
+    
+    if not overall_significant:
+        return f"No significant difference found between cluster sizes 5 and 12 for {metric}. Choice can be based on computational efficiency (cluster 5 is faster)."
+    
+    # Check individual subject types and model-specific comparisons
+    recommendations = []
+    
+    # Check overall model-specific comparisons
+    overall_comparisons = results['overall']['comparisons']
+    if len(overall_comparisons) > 0:
+        significant_comparisons = overall_comparisons[overall_comparisons['significant_corrected']]
+        if len(significant_comparisons) > 0:
+            recommendations.append("Significant model-specific differences found:")
+            for _, row in significant_comparisons.iterrows():
+                better_model = row['group1'] if row['mean1'] > row['mean2'] else row['group2']
+                effect_size = abs(row['cohen_d'])
+                recommendations.append(f"  • {better_model} performs significantly better (d = {effect_size:.3f}, {row['effect_interpretation']})")
+    
+    if recommendations:
+        return "\n".join(recommendations)
+    else:
+        return f"Overall significant difference found but no specific model pairs show significant differences after correction."
+
+def generate_embedding_recommendation(results, metric):
+    """Generate recommendation for embedding vs one-hot comparison"""
+    
+    significant = results['anova']['significant']
+    
+    if not significant:
+        return f"No significant difference found between Embedded and One-Hot encoding for {metric} in dependent models. Choice can be based on other factors like interpretability or computational requirements."
+    
+    # Check model-specific comparisons
+    comparisons = results['comparisons']
+    if len(comparisons) > 0:
+        significant_comparisons = comparisons[comparisons['significant_corrected']]
+        if len(significant_comparisons) > 0:
+            recommendations = ["Significant model-specific differences found:"]
+            for _, row in significant_comparisons.iterrows():
+                better_model = row['group1'] if row['mean1'] > row['mean2'] else row['group2']
+                encoding_type = "Embedded" if "embedded" in better_model else "One-Hot"
+                effect_size = abs(row['cohen_d'])
+                recommendations.append(f"  • {encoding_type} encoding performs better for this model (d = {effect_size:.3f}, {row['effect_interpretation']})")
+            return "\n".join(recommendations)
+    
+    return "Significant overall difference found but no specific model pairs show significant differences after correction."
+
+def generate_scale_recommendation(results, metric):
+    """Generate recommendation for scale comparison"""
+    
+    overall_significant = results['overall']['anova']['significant']
+    
+    if not overall_significant:
+        return f"No significant difference found between Single-scale and Multiscale approaches for {metric}. Choice can be based on computational complexity preferences."
+    
+    # Check model-specific comparisons
+    overall_comparisons = results['overall']['comparisons']
+    if len(overall_comparisons) > 0:
+        significant_comparisons = overall_comparisons[overall_comparisons['significant_corrected']]
+        if len(significant_comparisons) > 0:
+            recommendations = ["Significant model-specific differences found:"]
+            for _, row in significant_comparisons.iterrows():
+                better_model = row['group1'] if row['mean1'] > row['mean2'] else row['group2']
+                scale_type = "Multiscale" if "multiscale" in better_model else "Single-scale"
+                effect_size = abs(row['cohen_d'])
+                recommendations.append(f"  • {scale_type} performs better for this model (d = {effect_size:.3f}, {row['effect_interpretation']})")
+            return "\n".join(recommendations)
+    
+    return f"Overall significant difference found but no specific model pairs show significant differences after correction."
+
+# Convenience functions for easy usage
+def analyze_clusters(df, metric='test_bal_acc_mean', save_plots=False, plot_dir=None):
+    """Convenience function for cluster analysis with optional plot saving"""
+    return cluster_comparison_analysis(df, metric, save_plots=save_plots, plot_dir=plot_dir)
+
+def analyze_embedding(df, metric='test_bal_acc_mean', save_plots=False, plot_dir=None):
+    """Convenience function for embedding analysis with optional plot saving"""  
+    return embedding_comparison_analysis(df, metric, save_plots=save_plots, plot_dir=plot_dir)
+
+def analyze_scales(df, metric='test_bal_acc_mean', save_plots=False, plot_dir=None):
+    """Convenience function for scale analysis with optional plot saving"""
+    return kernel_scale_comparison_analysis(df, metric, save_plots=save_plots, plot_dir=plot_dir)
+
+def run_comprehensive_analysis(df, metrics=['test_bal_acc_mean', 'test_f1_mean'], 
+                              save_plots=True, plot_dir='analysis_plots'):
+    """
+    Run all three analyses for multiple metrics
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with model results
+    metrics : list
+        List of metrics to analyze
+    save_plots : bool
+        Whether to save plots to files
+    plot_dir : str
+        Directory to save plots
+    
+    Returns:
+    --------
+    full_results : dict
+        Complete results for all analyses
+    """
+    print("🚀 COMPREHENSIVE ML MODEL COMPARISON ANALYSIS")
+    print("=" * 80)
+    
+    import os
+    if save_plots:
+        os.makedirs(plot_dir, exist_ok=True)
+        print(f"📁 Plots will be saved to: {plot_dir}")
+    
+    full_results = {}
+    
+    for metric in metrics:
+        print(f"\n\n🎯 ANALYZING METRIC: {metric.upper()}")
+        print("=" * 80)
+        
+        metric_results = {}
+        
+        # 1. Cluster Size Comparison
+        print(f"\n{'='*20} RESEARCH QUESTION 1: CLUSTER SIZE COMPARISON {'='*20}")
+        cluster_results = analyze_clusters(df, metric, save_plots, f"{plot_dir}/cluster")
+        metric_results['cluster_comparison'] = cluster_results
+        
+        # 2. Embedding vs One-Hot Comparison
+        print(f"\n{'='*20} RESEARCH QUESTION 2: ENCODING TYPE COMPARISON {'='*20}")
+        embedding_results = analyze_embedding(df, metric, save_plots, f"{plot_dir}/embedding")
+        metric_results['embedding_comparison'] = embedding_results
+        
+        # 3. Kernel Scale Comparison
+        print(f"\n{'='*20} RESEARCH QUESTION 3: KERNEL SCALE COMPARISON {'='*20}")
+        scale_results = analyze_scales(df, metric, save_plots, f"{plot_dir}/scale")
+        metric_results['scale_comparison'] = scale_results
+        
+        full_results[metric] = metric_results
+    
+    # Generate summary
+    create_summary_table(full_results, metrics)
+    
+    return full_results
+
+def create_summary_table(full_results, metrics):
+    """
+    Create a summary table of all analyses
+    
+    Parameters:
+    -----------
+    full_results : dict
+        Results from comprehensive analysis
+    metrics : list
+        List of analyzed metrics
+    """
+    print(f"\n\n📋 COMPREHENSIVE SUMMARY TABLE")
+    print("=" * 80)
+    
+    summary_data = []
+    
+    for metric in metrics:
+        if metric not in full_results:
+            continue
+            
+        metric_results = full_results[metric]
+        
+        # Cluster comparison
+        if 'cluster_comparison' in metric_results and 'error' not in metric_results['cluster_comparison']:
+            cluster_res = metric_results['cluster_comparison']['overall']['anova']
+            summary_data.append({
+                'Analysis': 'Cluster Size (5 vs 12)',
+                'Metric': metric,
+                'F-statistic': f"{cluster_res['f_statistic']:.4f}",
+                'p-value': f"{cluster_res['p_value']:.4f}",
+                'Effect Size (η²)': f"{cluster_res['eta_squared']:.4f}",
+                'Interpretation': cluster_res['eta_interpretation'],
+                'Significant': 'Yes' if cluster_res['significant'] else 'No'
+            })
+        
+        # Embedding comparison
+        if 'embedding_comparison' in metric_results and 'error' not in metric_results['embedding_comparison']:
+            embed_res = metric_results['embedding_comparison']['anova']
+            summary_data.append({
+                'Analysis': 'Encoding (Embedded vs One-Hot)',
+                'Metric': metric,
+                'F-statistic': f"{embed_res['f_statistic']:.4f}",
+                'p-value': f"{embed_res['p_value']:.4f}",
+                'Effect Size (η²)': f"{embed_res['eta_squared']:.4f}",
+                'Interpretation': embed_res['eta_interpretation'],
+                'Significant': 'Yes' if embed_res['significant'] else 'No'
+            })
+        
+        # Scale comparison
+        if 'scale_comparison' in metric_results and 'error' not in metric_results['scale_comparison']:
+            scale_res = metric_results['scale_comparison']['overall']['anova']
+            summary_data.append({
+                'Analysis': 'Kernel Scale (Single vs Multi)',
+                'Metric': metric,
+                'F-statistic': f"{scale_res['f_statistic']:.4f}",
+                'p-value': f"{scale_res['p_value']:.4f}",
+                'Effect Size (η²)': f"{scale_res['eta_squared']:.4f}",
+                'Interpretation': scale_res['eta_interpretation'],
+                'Significant': 'Yes' if scale_res['significant'] else 'No'
+            })
+    
+    if summary_data:
+        summary_df = pd.DataFrame(summary_data)
+        print(summary_df.to_string(index=False))
+        
+        # Count significant results
+        significant_count = summary_df['Significant'].value_counts().get('Yes', 0)
+        total_count = len(summary_df)
+        
+        print(f"\n📊 OVERALL SUMMARY:")
+        print(f"   Total analyses: {total_count}")
+        print(f"   Significant results: {significant_count} ({significant_count/total_count*100:.1f}%)")
+        print(f"   Non-significant results: {total_count - significant_count} ({(total_count - significant_count)/total_count*100:.1f}%)")
+    else:
+        print("No valid results to summarize.")
+
+# Example usage and testing
+def test_functions():
+    """Test the functions with sample data"""
+    print("🧪 Testing functions...")
+    
+    # Create sample data similar to your structure
+    np.random.seed(42)
+    
+    sample_data = []
+    models = ['msn', 'msn_embedded', 'multiscale_msn', 'multiscale_msn_embedded', 
+              'dsn_msn', 'dsn_msn_embedded', 'dsn_multiscale_msn', 'dsn_multiscale_msn_embedded']
+    subject_types = ['dependent', 'independent']
+    cluster_sizes = [5, 12]
+    
+    for subject_type in subject_types:
+        for model in models:
+            for cluster_size in cluster_sizes:
+                if 'dcn' in model:
+                    continue
+                    
+                is_embedded = 'embedded' in model
+                performance = np.random.normal(75, 10)
+                
+                model_id = f"{model}_c{cluster_size}"
+                
+                sample_data.append({
+                    'subject_type': subject_type,
+                    'model_name': model,
+                    'model_id': model_id,
+                    'cluster_size': cluster_size,
+                    'is_embedded': is_embedded,
+                    'test_bal_acc_mean': performance,
+                    'test_f1_mean': performance - 3
+                })
+    
+    df = pd.DataFrame(sample_data)
+    
+    try:
+        print("Testing cluster analysis...")
+        cluster_results = analyze_clusters(df)
+        print("✅ Cluster analysis passed")
+        
+        print("Testing embedding analysis...")
+        embedding_results = analyze_embedding(df)
+        print("✅ Embedding analysis passed")
+        
+        print("Testing scale analysis...")
+        scale_results = analyze_scales(df)
+        print("✅ Scale analysis passed")
+        
+        print("🎉 All tests passed!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Test failed: {e}")
+        return False
+
