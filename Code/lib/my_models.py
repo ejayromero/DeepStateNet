@@ -29,11 +29,11 @@ class FeatureExtractor(nn.Module):
             
         # Determine model type and create appropriate feature extractor
         model_type = type(self.backbone).__name__
-        print(f"Creating FeatureExtractor for model type: {model_type}")
+        # print(f"Creating FeatureExtractor for model type: {model_type}")
         
         # Check if model uses embedding (unified models)
         uses_embedding = getattr(self.backbone, 'use_embedding', False)
-        print(f"Model uses embedding: {uses_embedding}")
+        # print(f"Model uses embedding: {uses_embedding}")
         
         if model_type == 'MicroStateNet':
             if uses_embedding:
@@ -60,7 +60,7 @@ class FeatureExtractor(nn.Module):
             self.feature_extractor = self._create_embedded_feature_extractor()
         else:
             # Fallback for any other models
-            print(f"Using generic feature extractor for unknown model type: {model_type}")
+            # print(f"Using generic feature extractor for unknown model type: {model_type}")
             self.feature_extractor = self._create_generic_feature_extractor()
             
         # Freeze the feature extractor
