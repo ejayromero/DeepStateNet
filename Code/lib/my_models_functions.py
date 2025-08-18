@@ -222,7 +222,7 @@ class MicrostateDataLoader(BaseDataLoader):
         else:  # input_format == 'one_hot'
             file_type = 'ms_timeseries'
         
-        print(f"Model {args.model_name} uses {input_format} format, loading from {file_type}")
+        # print(f"Model {args.model_name} uses {input_format} format, loading from {file_type}")
         
         finals_ls_folder = os.path.join(kmeans_path, file_type)
         if not os.path.exists(finals_ls_folder):
@@ -252,7 +252,7 @@ class MicrostateDataLoader(BaseDataLoader):
             # Handle potential negative indices
             min_val = torch.min(x).item()
             if min_val < 0:
-                print(f"Found negative microstate indices ({min_val}), shifting to start from 0...")
+                # print(f"Found negative microstate indices ({min_val}), shifting to start from 0...")
                 x = x - min_val
         
         return x
@@ -1472,51 +1472,51 @@ def extract_features_from_model(model, data, device, batch_size=32):
     else:
         x = data.clone()
     
-    print(f"  Original data shape: {x.shape}")
+    # print(f"  Original data shape: {x.shape}")
     
     # Determine model type first to handle data conversion correctly
     model_backbone = model.module if hasattr(model, 'module') else model
     is_embedded_model = hasattr(model_backbone, 'microstate_embedding')
     
-    print(f"  Is embedded model: {is_embedded_model}")
+    # print(f"  Is embedded model: {is_embedded_model}")
     
     # Handle different data formats based on the expected input
     if len(x.shape) == 4:
         # Could be (n_trials, 1, n_channels, timepoints) or (n_trials, n_channels, 1, timepoints)
         if x.shape[1] == 1:  # (n_trials, 1, n_channels, timepoints) - raw EEG format
             x = x.squeeze(1)  # Remove singleton dimension -> (n_trials, n_channels, timepoints)
-            print(f"  Raw EEG format detected, shape after squeeze: {x.shape}")
+            # print(f"  Raw EEG format detected, shape after squeeze: {x.shape}")
         elif x.shape[2] == 1:  # (n_trials, n_channels, 1, timepoints)
             x = x.squeeze(2)  # Remove singleton dimension -> (n_trials, n_channels, timepoints)
-            print(f"  Format with singleton at dim 2, shape after squeeze: {x.shape}")
+            # print(f"  Format with singleton at dim 2, shape after squeeze: {x.shape}")
         else:
             print(f"  4D format without singleton, keeping as is: {x.shape}")
     elif len(x.shape) == 3:
         # Could be (n_trials, n_channels, timepoints) - microstate format
-        print(f"  3D format detected, shape: {x.shape}")
+        # print(f"  3D format detected, shape: {x.shape}")
         
         # Check if this is microstate data with 2 channels (microstates + GFP)
         if x.shape[1] == 2:
-            print("  Detected microstate + GFP format")
+            # print("  Detected microstate + GFP format")
             
             if is_embedded_model:
-                print("  Model is EmbeddedMicroStateNet - extracting microstate sequences only")
+                # print("  Model is EmbeddedMicroStateNet - extracting microstate sequences only")
                 # Extract only microstate sequences (first channel) for embedded models
                 x_microstates = x[:, 0, :]  # Shape: (batch_size, sequence_length)
                 
                 # Handle negative indices (embedding layers require indices >= 0)
                 min_val = torch.min(x_microstates).item()
                 if min_val < 0:
-                    print(f"  Found negative microstate indices ({min_val}), shifting to start from 0...")
+                    # print(f"  Found negative microstate indices ({min_val}), shifting to start from 0...")
                     x_microstates = x_microstates - min_val
-                    print(f"  New microstate range: {torch.min(x_microstates).item()} to {torch.max(x_microstates).item()}")
+                    # print(f"  New microstate range: {torch.min(x_microstates).item()} to {torch.max(x_microstates).item()}")
                 
                 # CRITICAL: Convert to integer type for embedding
                 x = x_microstates.long()
-                print(f"  Converted to integer type for embedding: {x.dtype}")
-                print(f"  Preprocessed data shape for EmbeddedMicroStateNet: {x.shape}")
+                # print(f"  Converted to integer type for embedding: {x.dtype}")
+                # print(f"  Preprocessed data shape for EmbeddedMicroStateNet: {x.shape}")
             else:
-                print("  Model expects one-hot encoded data - converting microstate sequences")
+                # print("  Model expects one-hot encoded data - converting microstate sequences")
                 # For other models, convert to one-hot encoding
                 x_microstates = x[:, 0, :].long()
                 
@@ -1532,32 +1532,32 @@ def extract_features_from_model(model, data, device, batch_size=32):
                 x_onehot = torch.zeros(x_microstates.shape[0], n_microstates, sequence_length)
                 x_onehot.scatter_(1, x_microstates.unsqueeze(1), 1)
                 x = x_onehot.float()
-                print(f"  Converted to one-hot shape: {x.shape}")
+                # print(f"  Converted to one-hot shape: {x.shape}")
         else:
             # Standard 3D format - ensure correct type
             if is_embedded_model and x.dtype == torch.float32:
                 x = x.long()
-                print(f"  Converted 3D data to integer type for embedding: {x.dtype}")
+                # print(f"  Converted 3D data to integer type for embedding: {x.dtype}")
             elif not is_embedded_model and x.dtype != torch.float32:
                 x = x.float()
-                print(f"  Converted 3D data to float type: {x.dtype}")
+                # print(f"  Converted 3D data to float type: {x.dtype}")
                 
     elif len(x.shape) == 2:
         # Could be (n_trials, sequence_length) - embedded microstate format
-        print(f"  2D format (likely embedded microstate), shape: {x.shape}")
+        # print(f"  2D format (likely embedded microstate), shape: {x.shape}")
         
         if is_embedded_model:
             # Ensure integer type for embedding
             if x.dtype == torch.float32 or x.dtype == torch.float64:
-                print(f"  Converting 2D float data to integer indices for embedded model")
+                # print(f"  Converting 2D float data to integer indices for embedded model")
                 x = x.long()
             
             # Handle negative indices
             min_val = torch.min(x).item()
             if min_val < 0:
-                print(f"  Found negative indices ({min_val}), shifting to start from 0...")
+                # print(f"  Found negative indices ({min_val}), shifting to start from 0...")
                 x = x - min_val
-                print(f"  New range: {torch.min(x).item()} to {torch.max(x).item()}")
+                # print(f"  New range: {torch.min(x).item()} to {torch.max(x).item()}")
                 
         print(f"  Final data type: {x.dtype}")
     else:
@@ -1582,7 +1582,7 @@ def extract_features_from_model(model, data, device, batch_size=32):
                 raise
     
     subject_features = torch.cat(features_list, dim=0)
-    print(f"  Extracted features shape: {subject_features.shape}")
+    # print(f"  Extracted features shape: {subject_features.shape}")
     
     return subject_features
 

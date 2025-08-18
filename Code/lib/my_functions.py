@@ -342,7 +342,7 @@ def load_ms(subject_id, n_clusters, seq_time_path, seq_time_type='modk_sequence'
     seq_folder = os.path.join(seq_time_path, f'{seq_time_type}_c{n_clusters}_{seq_time_specific}')
     seq_file = os.path.join(seq_folder, f'ms{id_name}.npy')
     if os.path.exists(seq_file):
-        print(f"Loading s{id_name}\'s results from {seq_file}")
+        # print(f"Loading s{id_name}\'s results from {seq_file}")
         seq = np.load(seq_file)
         return seq
     else:
