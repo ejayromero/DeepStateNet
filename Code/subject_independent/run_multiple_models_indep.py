@@ -56,7 +56,7 @@ def create_model_combinations():
     
     # ============ CONFIGURATION ============
     # Which models to run - MODIFY THIS LIST to control what gets trained
-    models_to_run = ['dcn_indep', 'msn_indep', 'dsn_indep']  # Options: 'dcn_indep', 'msn_indep', 'dsn_indep'
+    models_to_run = ['dsn_indep']  # Options: 'dcn_indep', 'msn_indep', 'dsn_indep'
     
     # Training parameters
     clusters = [5]  # Multiple cluster sizes (for MSN and DSN)
@@ -68,9 +68,9 @@ def create_model_combinations():
     
     # MSN/DSN Model configurations (clusters matter for these)
     msn_model_configs = [
-        {'model': 'msn', 'embedding': False, 'name': 'MSN LOSO'},
-        {'model': 'multiscale_msn', 'embedding': False, 'name': 'MultiScale MSN LOSO'},
-        {'model': 'msn', 'embedding': True, 'name': 'MSN LOSO (Embedded)'},
+        # {'model': 'msn', 'embedding': False, 'name': 'MSN LOSO'},
+        # {'model': 'multiscale_msn', 'embedding': False, 'name': 'MultiScale MSN LOSO'},
+        # {'model': 'msn', 'embedding': True, 'name': 'MSN LOSO (Embedded)'},
         {'model': 'multiscale_msn', 'embedding': True, 'name': 'MultiScale MSN LOSO (Embedded)'},
     ]
     

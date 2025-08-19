@@ -12,7 +12,7 @@ from pycrostates.metrics import calinski_harabasz_score, davies_bouldin_score
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lib.my_stats_functions import modkmeans_exact_spatial_score
+from lib.my_functions import modkmeans_exact_spatial_score
 
 n_clusters = 12
 max_k_clusters = 50  # Maximum number of clusters to evaluate

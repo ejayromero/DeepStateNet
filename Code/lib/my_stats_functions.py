@@ -7,6 +7,7 @@ import os
 import numpy as np
 import seaborn as sns
 import pandas as pd
+import colorsys
 import matplotlib.pyplot as plt
 from scipy import stats
 from scipy.stats import shapiro, levene
@@ -567,51 +568,92 @@ def show_experiment_status(extracted_results):
         'completion_rate': total_completed/total_results*100
     }
 # ============================== Plotting Functions =================================
-def get_model_colors(df):
-    """
-    Generate color palettes for each subject type based on available models
-    Creates unique colors for each model+cluster combination
+# def get_model_colors(df):
+#     """
+#     Generate color palettes for each subject type based on available models
+#     Creates unique colors for each model+cluster combination
     
-    Args:
-        df: DataFrame with results
+#     Args:
+#         df: DataFrame with results
         
-    Returns:
-        dict: {subject_type: {model_key: color}} where model_key includes cluster info
-    """
-    # Define color palettes for each subject type
-    palette_map = {
-        'dependent': 'flare_r',
-        'independent': 'summer_r', 
-        'adaptive': 'Blues_d'
-    }
+#     Returns:
+#         dict: {subject_type: {model_key: color}} where model_key includes cluster info
+#     """
+#     # Define color palettes for each subject type
+#     palette_map = {
+#         'dependent': 'flare_r',
+#         'independent': 'summer_r', 
+#         'adaptive': 'Blues_d'
+#     }
     
-    color_dict = {}
+#     color_dict = {}
     
-    for subject_type in ['dependent', 'independent', 'adaptive']:
-        # Get all unique model+cluster combinations for this subject type
-        subject_df = df[df['subject_type'] == subject_type]
+#     for subject_type in ['dependent', 'independent', 'adaptive']:
+#         # Get all unique model+cluster combinations for this subject type
+#         subject_df = df[df['subject_type'] == subject_type]
         
-        # Create unique keys that include cluster info
-        model_keys = []
-        for _, row in subject_df.iterrows():
-            if row['model_name'] == 'dcn':
-                model_key = 'dcn'  # DCN doesn't have clusters
-            else:
-                model_key = f"{row['model_name']}_c{row['cluster_size']}"
-            model_keys.append(model_key)
+#         # Create unique keys that include cluster info
+#         model_keys = []
+#         for _, row in subject_df.iterrows():
+#             if row['model_name'] == 'dcn':
+#                 model_key = 'dcn'  # DCN doesn't have clusters
+#             else:
+#                 model_key = f"{row['model_name']}_c{row['cluster_size']}"
+#             model_keys.append(model_key)
         
-        # Get unique model keys
-        unique_model_keys = list(dict.fromkeys(model_keys))  # Preserves order
-        n_models = len(unique_model_keys)
+#         # Get unique model keys
+#         unique_model_keys = list(dict.fromkeys(model_keys))  # Preserves order
+#         n_models = len(unique_model_keys)
         
-        if n_models > 0:
-            # Generate color palette
-            colors = sns.color_palette(palette_map[subject_type], n_models)
-            color_dict[subject_type] = dict(zip(unique_model_keys, colors))
+#         if n_models > 0:
+#             # Generate color palette
+#             colors = sns.color_palette(palette_map[subject_type], n_models)
+#             color_dict[subject_type] = dict(zip(unique_model_keys, colors))
+#         else:
+#             color_dict[subject_type] = {}
+    
+#     return color_dict
+
+# def get_model_key(row):
+#     """Helper function to create consistent model keys"""
+#     if row['model_name'] == 'dcn':
+#         return 'dcn'
+#     else:
+#         return f"{row['model_name']}_c{row['cluster_size']}"
+
+def generate_n_spectrum_palettes(n_palettes, n_color_shades=3, 
+                                 light_sat=0.45, light_val=0.87,
+                                 medium_sat=0.72, medium_val=0.73,
+                                 dark_sat=0.82, dark_val=0.53):
+    """Generate n distinct color palettes using full spectrum division"""
+    
+    # Split full spectrum into n_palettes+1 parts, take first n_palettes
+    hue_step = 1.0 / (n_palettes + 1)
+    base_hues = [i * hue_step for i in range(n_palettes)]
+    
+    palettes = {}
+    
+    for i, base_hue in enumerate(base_hues):
+        colors = []
+        
+        if n_color_shades == 3:
+            # Light, medium, dark
+            light_rgb = colorsys.hsv_to_rgb(base_hue, light_sat, light_val)
+            medium_rgb = colorsys.hsv_to_rgb(base_hue, medium_sat, medium_val)
+            dark_rgb = colorsys.hsv_to_rgb(base_hue, dark_sat, dark_val)
+            colors = [light_rgb, medium_rgb, dark_rgb]
         else:
-            color_dict[subject_type] = {}
+            # Handle other cases if needed
+            sat_values = np.linspace(light_sat, dark_sat, n_color_shades)
+            val_values = np.linspace(light_val, dark_val, n_color_shades)
+            
+            for sat, val in zip(sat_values, val_values):
+                rgb = colorsys.hsv_to_rgb(base_hue, sat, val)
+                colors.append(rgb)
+        
+        palettes[f'model_{i+1}'] = colors
     
-    return color_dict
+    return palettes
 
 def get_model_key(row):
     """Helper function to create consistent model keys"""
@@ -620,42 +662,193 @@ def get_model_key(row):
     else:
         return f"{row['model_name']}_c{row['cluster_size']}"
 
-def plot_model_comparison(df, score_types=['test_bal_acc', 'test_f1'], metric_type='test'):
+def get_all_unique_models(df):
+    """Get all unique models across all subject types"""
+    all_model_keys = []
+    
+    for _, row in df.iterrows():
+        model_key = get_model_key(row)
+        all_model_keys.append(model_key)
+    
+    # Get unique model keys preserving order
+    unique_model_keys = list(dict.fromkeys(all_model_keys))
+    return unique_model_keys
+
+def get_model_colors(df):
+    """
+    Generate color palettes for each subject type based on available models
+    Creates consistent colors across subject types with different shades
+    
+    Args:
+        df: DataFrame with results containing 'model_name', 'cluster_size', 'subject_type'
+        
+    Returns:
+        dict: {subject_type: {model_key: color}} - SAME FORMAT AS ORIGINAL
+    """
+    
+    # Get all unique models across all subject types
+    all_unique_models = get_all_unique_models(df)
+    n_models = len(all_unique_models)
+    
+    print(f"Found {n_models} unique models: {all_unique_models}")
+    
+    # Generate n_models color palettes with 3 shades each
+    color_palettes = generate_n_spectrum_palettes(n_palettes=n_models, n_color_shades=3)
+    
+    # Map each model to its palette
+    model_to_palette = {}
+    for i, model_key in enumerate(all_unique_models):
+        palette_key = f'model_{i+1}'
+        model_to_palette[model_key] = color_palettes[palette_key]
+    
+    # Create the output in the SAME FORMAT as your original function
+    color_dict = {
+        'dependent': {},    # Light shade (index 0)
+        'independent': {},  # Medium shade (index 1)
+        'adaptive': {}      # Dark shade (index 2)
+    }
+    
+    # For each subject type, add colors for models that exist in that subject type
+    for subject_type in ['dependent', 'independent', 'adaptive']:
+        subject_df = df[df['subject_type'] == subject_type]
+        
+        # Get model keys that exist in this subject type
+        existing_model_keys = []
+        for _, row in subject_df.iterrows():
+            model_key = get_model_key(row)
+            existing_model_keys.append(model_key)
+        
+        unique_existing = list(dict.fromkeys(existing_model_keys))
+        
+        # Assign appropriate shade based on subject type
+        shade_index = {'dependent': 0, 'independent': 1, 'adaptive': 2}[subject_type]
+        
+        for model_key in unique_existing:
+            if model_key in model_to_palette:
+                color_dict[subject_type][model_key] = model_to_palette[model_key][shade_index]
+    
+    return color_dict
+
+def get_color_for_row(row, color_dict):
+    """Get the appropriate color for a dataframe row - UPDATED to match new format"""
+    model_key = get_model_key(row)
+    subject_type = row['subject_type']
+    
+    # Return the color for this model+subject combination
+    return color_dict[subject_type].get(model_key, 'gray')
+def merge_plot_styles(custom_style=None):
+    """
+    Merge custom plot style with default style
+    
+    Args:
+        custom_style: Dictionary with custom style overrides
+        
+    Returns:
+        Merged style dictionary
+    """
+    DEFAULT_PLOT_STYLE = {
+        'line': {
+            'marker': 'o',
+            'markersize': 4,
+            'linewidth': 2,
+            'alpha': 0.8,
+            'linestyle': '--'  # dashed lines
+        },
+        'scatter': {
+            'marker': 'o',
+            's': 40,
+            'alpha': 0.7
+        },
+        'bar': {
+            'capsize': 3,
+            'alpha': 0.8,
+            'edgecolor': 'black',
+            'linewidth': 0.5
+        },
+        'violin': {
+            'inner_kws': {'box_width': 10, 'whis_width': 2, 'color': 'dimgray'},
+            'cut': 0,
+            'alpha': 0.8
+        },
+        'figure': {
+            'context': 'talk',
+            'figsize_2x3': (24, 16),
+            'figsize_1x3': (24, 8),
+            'figsize_comparison': (15, 12),
+            'figsize_violin': (30, 20),
+            'figsize_violin_grouped': (30, 20),
+            'suptitle_fontsize': 16,
+            'title_fontsize': 14,
+            'label_fontsize': 12,
+            'legend_fontsize': 10,
+            'ticks_fontsize': 10,
+            'bar_label_fontsize': 9,
+            'grid_alpha': 0.3
+        },
+        'colors': {
+            'text_color': 'black',
+            'grid_color': 'gray',
+            'fallback_color': 'gray'
+        }
+    }
+    
+    if custom_style is None:
+        return DEFAULT_PLOT_STYLE
+    
+    # Deep merge custom style with default
+    merged_style = DEFAULT_PLOT_STYLE.copy()
+    for key, value in custom_style.items():
+        if key in merged_style and isinstance(value, dict):
+            merged_style[key].update(value)
+        else:
+            merged_style[key] = value
+    
+    return merged_style
+
+
+def plot_model_comparison(df, score_types=['test_bal_acc', 'test_f1'], metric_type='test', my_plot_style=None):
     """
     Main function that creates 2x2 subplots (top row: balanced accuracy, bottom row: f1)
     
     Args:
         df: DataFrame with model results
         score_types: List of score types to plot (first will be top row, second bottom row)
+        metric_type: Type of metric being plotted
+        my_plot_style: Custom plot style dictionary to override defaults
     """
     if df is None:
         return
+    
+    # Merge custom style with defaults
+    style = merge_plot_styles(my_plot_style)
     
     # Get the color dictionary
     color_dict = get_model_colors(df)
     subject_types = df['subject_type'].unique()
     n_subjects = len(subject_types)
     
-    with sns.plotting_context('talk'):
-        fig, axes = plt.subplots(2, n_subjects, figsize=(15, 12))
-        fig.suptitle(f'Model Performance Comparison in {metric_type}', fontsize=16, fontweight='bold')
+    with sns.plotting_context(style['figure']['context']):
+        fig, axes = plt.subplots(2, n_subjects, figsize=style['figure']['figsize_comparison'])
+        fig.suptitle(f'Model Performance Comparison in {metric_type}', 
+                    fontsize=style['figure']['suptitle_fontsize'], fontweight='bold')
+        
         # If only one subject type, make axes 2D
         if n_subjects == 1:
             axes = axes.reshape(2, 1)
         
         # Plot balanced accuracy on top row
         for j, subject_type in enumerate(subject_types):
-            plot_single_metric(df, axes[0, j], score_types[0], color_dict, subject_type)
+            plot_single_metric(df, axes[0, j], score_types[0], color_dict, subject_type, style)
         
         # Plot F1 on bottom row  
         for j, subject_type in enumerate(subject_types):
-            plot_single_metric(df, axes[1, j], score_types[1], color_dict, subject_type)
+            plot_single_metric(df, axes[1, j], score_types[1], color_dict, subject_type, style)
         
         plt.tight_layout()
         plt.show()
 
 
-def plot_single_metric(df, ax, score_type, color_dict, subject_type):
+def plot_single_metric(df, ax, score_type, color_dict, subject_type, style):
     """
     Plot a single metric for a single subject type on given axis
     
@@ -665,6 +858,7 @@ def plot_single_metric(df, ax, score_type, color_dict, subject_type):
         score_type: The score type to plot (e.g., 'test_f1', 'test_bal_acc')
         color_dict: Color dictionary from get_model_colors()
         subject_type: Which subject type to plot ('dependent', 'independent', 'adaptive')
+        style: Plot style dictionary
     """
     # Filter data for this subject type
     subset = df[df['subject_type'] == subject_type]
@@ -677,12 +871,13 @@ def plot_single_metric(df, ax, score_type, color_dict, subject_type):
     mean_col = f'{score_type}_mean'
     std_col = f'{score_type}_std'
     
-    # Create bar plot with colors
+    # Create bar plot with colors and style
     x_pos = range(len(subset))
+    bar_style = style['bar'].copy()
     bars = ax.bar(x_pos, subset[mean_col], 
                   yerr=subset[std_col], 
-                  capsize=3,
-                  color=colors)
+                  color=colors,
+                  **bar_style)
     
     # Set labels based on score type
     if 'f1' in score_type.lower():
@@ -692,29 +887,38 @@ def plot_single_metric(df, ax, score_type, color_dict, subject_type):
     else:
         ylabel = f'{score_type.replace("_", " ").title()} (%)'
     
-    ax.set_title(f'{subject_type.title()} Models', fontsize=12, fontweight='bold')
-    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_title(f'{subject_type.title()} Models', 
+                fontsize=style['figure']['title_fontsize'], fontweight='bold')
+    ax.set_ylabel(ylabel, fontsize=style['figure']['label_fontsize'])
     ax.set_xticks(x_pos)
-    ax.set_xticklabels(subset['model_id'], rotation=45, ha='right', fontsize=10)
+    ax.set_xticklabels(subset['model_id'], rotation=45, ha='right', 
+                      fontsize=style['figure']['ticks_fontsize'])
     ax.tick_params(axis='x', bottom=True)
 
     # Add value labels on bars
     for bar, mean_val, std_val in zip(bars, subset[mean_col], subset[std_col]):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std_val + 0.5,
-                f'{mean_val:.1f}%', ha='center', va='bottom', fontsize=9)
+                f'{mean_val:.1f}%', ha='center', va='bottom', 
+                fontsize=style['figure']['bar_label_fontsize'])
 
     ax.set_ylim(0, max(df[mean_col] + df[std_col]) + 5)
 
-def plot_model_violin_comparison(df, transpose=False):
+
+def plot_model_violin_comparison(df, transpose=False, my_plot_style=None):
     """
     Create violin plots comparing all models across subject types
     
     Args:
         df: DataFrame with results
+        transpose: Whether to transpose the subplot layout
+        my_plot_style: Custom plot style dictionary to override defaults
         
     Returns:
         matplotlib figure
     """
+    # Merge custom style with defaults
+    style = merge_plot_styles(my_plot_style)
+    
     # Model name mapping for shorter labels (including cluster info)
     def get_model_short_name(row):
         model_mapping = {
@@ -772,21 +976,22 @@ def plot_model_violin_comparison(df, transpose=False):
             })
     
     plot_df = pd.DataFrame(plot_data)
-    # subject_types = ['dependent']
-    # subject_types = ['dependent', 'independent']
     subject_types = ['dependent', 'independent', 'adaptive']
     metrics = ['Balanced Accuracy', 'F1 Macro']
-    # Create subplots: 2 rows (metrics) x 1 col (subject types)
+    
+    # Create subplots based on transpose setting
     if transpose:
         n_rows = len(subject_types)
         n_cols = len(metrics)
-        fig_size = (20, 10)
+        fig_size = style['figure']['figsize_violin']
     else:
         n_rows = len(metrics)
         n_cols = len(subject_types)
-        fig_size = (30, 20)
+        fig_size = style['figure']['figsize_violin']
+        
     fig, axes = plt.subplots(n_rows, n_cols, figsize=fig_size, sharey=True)
-    fig.suptitle('Model Performance Comparison Across Subject Types', fontsize=16, y=0.98)
+    fig.suptitle('Model Performance Comparison Across Subject Types', 
+                fontsize=style['figure']['suptitle_fontsize'], y=0.98)
     
     for row, metric in enumerate(metrics):
         for col, subject_type in enumerate(subject_types):
@@ -804,7 +1009,6 @@ def plot_model_violin_comparison(df, transpose=False):
             if not subset.empty:
                 # Get unique models for this subject type in order
                 unique_models = subset['model'].unique()
-                unique_model_keys = []
                 
                 # Create mapping from model short name to model key for color lookup
                 model_to_key = {}
@@ -817,41 +1021,46 @@ def plot_model_violin_comparison(df, transpose=False):
                 colors = []
                 for model in unique_models:
                     model_key = model_to_key[model]
-                    color = subject_colors.get(model_key, 'gray')  # Default to gray if not found
+                    color = subject_colors.get(model_key, style['colors']['fallback_color'])
                     colors.append(color)
                 
-                # Create violin plot with no inner elements and cut=0
+                # Create violin plot with custom style
+                violin_style = style['violin'].copy()
                 sns.violinplot(data=subset, x='model', y='score', ax=ax, 
-                            palette=colors,
-                            inner_kws=dict(box_width=10, whis_width=2, color = 'dimgray'), 
-                            cut=0)
-                # Add mean markers
-                # means = subset.groupby('model')['score'].mean()
-                # for i, (model, mean_val) in enumerate(means.items()):
-                #     ax.scatter(i, mean_val, color='red', s=100, zorder=3, marker='_')
-            # Formatting
+                            palette=colors, **violin_style)
+            
+            # Formatting with custom style
             ax.set_ylim(-3, 103)
-            ax.set_title(f'{subject_type.title()}' if row == 0 else '')
-            ax.set_xlabel('Model Type' if row == 1 else '')
-            ax.set_ylabel(f'{metric} (%)' if col == 0 else '')
+            ax.set_title(f'{subject_type.title()}' if row == 0 else '', 
+                        fontsize=style['figure']['title_fontsize'])
+            ax.set_xlabel('Model Type' if row == 1 else '', 
+                         fontsize=style['figure']['label_fontsize'])
+            ax.set_ylabel(f'{metric} (%)' if col == 0 else '', 
+                         fontsize=style['figure']['label_fontsize'])
+            
             if not subset.empty:
                 ax.set_xticks(range(len(unique_models)))
-                ax.set_xticklabels(unique_models, rotation=45, ha='right')
-            ax.tick_params(axis='x', rotation=45, colors='black', bottom=True)
-            ax.grid(True, axis='x')
+                ax.set_xticklabels(unique_models, rotation=45, ha='right', 
+                                 fontsize=style['figure']['ticks_fontsize'])
+            
+            ax.tick_params(axis='x', rotation=45, colors=style['colors']['text_color'], bottom=True)
+            ax.grid(True, axis='x', alpha=style['figure']['grid_alpha'])
             
             # Remove x-axis labels for top row
             if row == 0:
-                # ax.set_xticklabels([])
                 ax.set_xlabel('')
     
     plt.tight_layout()
     return fig
 
-def plot_violin_comparison(df, save_path=None):
+
+def plot_violin_comparison(df, save_path=None, my_plot_style=None):
     """Create and optionally save violin comparison plot"""
-    with sns.plotting_context("talk"):
-        fig = plot_model_violin_comparison(df)
+    # Merge custom style with defaults
+    style = merge_plot_styles(my_plot_style)
+    
+    with sns.plotting_context(style['figure']['context']):
+        fig = plot_model_violin_comparison(df, my_plot_style=my_plot_style)
         
         if save_path:
             fig.savefig(os.path.join(save_path, 'model_violin_comparison.png'), 
@@ -860,19 +1069,23 @@ def plot_violin_comparison(df, save_path=None):
         
         plt.close()
         return fig
-    
-def plot_grouped_violin_comparison(df, save_path=None):
+
+
+def plot_grouped_violin_comparison(df, save_path=None, my_plot_style=None):
     """
     Create grouped violin plots by model family (DCN, MSN, DSN)
-    Uses same visual style and colors as the main violin plot
+    Uses customizable visual style and colors
     
     Args:
         df: DataFrame with results
         save_path: Optional path to save the plot
+        my_plot_style: Custom plot style dictionary to override defaults
         
     Returns:
         matplotlib figure
     """
+    # Merge custom style with defaults
+    style = merge_plot_styles(my_plot_style)
     
     # Model name mapping for shorter labels (same as main function)
     def get_model_short_name(row):
@@ -921,7 +1134,7 @@ def plot_grouped_violin_comparison(df, save_path=None):
                 'model_family': model_family,
                 'model': model_short,
                 'model_full': row['model_name'],
-                'model_key': model_key,  # Add model key for color mapping
+                'model_key': model_key,
                 'metric': 'Balanced Accuracy',
                 'score': score,
                 'cluster_size': row['cluster_size']
@@ -934,7 +1147,7 @@ def plot_grouped_violin_comparison(df, save_path=None):
                 'model_family': model_family,
                 'model': model_short,
                 'model_full': row['model_name'],
-                'model_key': model_key,  # Add model key for color mapping
+                'model_key': model_key,
                 'metric': 'F1 Macro',
                 'score': score,
                 'cluster_size': row['cluster_size']
@@ -942,10 +1155,11 @@ def plot_grouped_violin_comparison(df, save_path=None):
     
     plot_df = pd.DataFrame(plot_data)
     
-    with sns.plotting_context("talk"):
+    with sns.plotting_context(style['figure']['context']):
         # Create subplots: 2 rows (metrics) x 3 cols (model families)
-        fig, axes = plt.subplots(2, 3, figsize=(30, 20), sharey=True)
-        fig.suptitle('Model Performance by Family (DCN, MSN, DSN)', fontsize=16, y=0.98)
+        fig, axes = plt.subplots(2, 3, figsize=style['figure']['figsize_violin_grouped'], sharey=True)
+        fig.suptitle('Model Performance by Family (DCN, MSN, DSN)', 
+                    fontsize=style['figure']['suptitle_fontsize'], y=0.98)
         
         metrics = ['Balanced Accuracy', 'F1 Macro']
         model_families = ['DCN', 'MSN', 'DSN']
@@ -972,13 +1186,13 @@ def plot_grouped_violin_comparison(df, save_path=None):
                         for subject_type in unique_subjects:
                             # Get DCN color for this subject type from color_dict
                             subject_colors = color_dict.get(subject_type, {})
-                            dcn_color = subject_colors.get('dcn', 'gray')
+                            dcn_color = subject_colors.get('dcn', style['colors']['fallback_color'])
                             colors.append(dcn_color)
                         
+                        # Apply custom violin style
+                        violin_style = style['violin'].copy()
                         sns.violinplot(data=subset_dcn, x='subject_type', y='score', 
-                                    ax=ax, palette=colors,
-                                    inner_kws=dict(box_width=10, whis_width=2, color = 'dimgray'), 
-                                    cut=0)
+                                    ax=ax, palette=colors, **violin_style)
                         
                         unique_models = unique_subjects
                         
@@ -1012,22 +1226,24 @@ def plot_grouped_violin_comparison(df, save_path=None):
                                     
                                     # Look up color using model key
                                     model_key = label_to_key.get(x_label, '')
-                                    color = subject_colors.get(model_key, 'gray')
+                                    color = subject_colors.get(model_key, style['colors']['fallback_color'])
                                     colors.append(color)
                         
-                        # Create violin plot
+                        # Create violin plot with custom style
+                        violin_style = style['violin'].copy()
                         sns.violinplot(data=family_data, x='x_label', y='score', 
-                                    ax=ax, palette=colors,
-                                    inner_kws=dict(box_width=10, whis_width=2, color = 'dimgray'), 
-                                    cut=0, order=unique_combos)
+                                    ax=ax, palette=colors, order=unique_combos, **violin_style)
                         
                         unique_models = unique_combos
                 
-                # Formatting (same style as main function)
+                # Formatting with custom style
                 ax.set_ylim(-3, 103)
-                ax.set_title(f'{model_family}' if row == 0 else '')
-                ax.set_xlabel('Models' if row == 1 else '')
-                ax.set_ylabel(f'{metric} (%)' if col == 0 else '')
+                ax.set_title(f'{model_family}' if row == 0 else '', 
+                           fontsize=style['figure']['title_fontsize'])
+                ax.set_xlabel('Models' if row == 1 else '', 
+                            fontsize=style['figure']['label_fontsize'])
+                ax.set_ylabel(f'{metric} (%)' if col == 0 else '', 
+                            fontsize=style['figure']['label_fontsize'])
                 
                 if not family_data.empty:
                     n_models = len(unique_models)
@@ -1043,9 +1259,10 @@ def plot_grouped_violin_comparison(df, save_path=None):
                             subject, model = combo.split('_', 1)
                             clean_labels.append(f"{subject}\n{model}")
                     
-                    ax.set_xticklabels(clean_labels, rotation=45, ha='right')
-                    ax.tick_params(axis='x', rotation=45, colors='black', bottom=True)
-                    ax.grid(True, axis='x')
+                    ax.set_xticklabels(clean_labels, rotation=45, ha='right', 
+                                     fontsize=style['figure']['ticks_fontsize'])
+                    ax.tick_params(axis='x', rotation=45, colors=style['colors']['text_color'], bottom=True)
+                    ax.grid(True, axis='x', alpha=style['figure']['grid_alpha'])
                 
                 # Remove x-axis labels for top row
                 if row == 0:
@@ -1061,17 +1278,12 @@ def plot_grouped_violin_comparison(df, save_path=None):
         plt.close()
         return fig
 
-def plot_grouped_comparison(df, save_path=None):
-    """Create grouped violin comparison plot with same style as main plot"""
-    return plot_grouped_violin_comparison(df, save_path)
+
+def plot_grouped_comparison(df, save_path=None, my_plot_style=None):
+    """Create grouped violin comparison plot with customizable style"""
+    return plot_grouped_violin_comparison(df, save_path, my_plot_style)
 
 
-
-
-
-
-# Default plot style dictionary - modify this to change all plot styles at once
-# Default plot style dictionary - modify this to change all plot styles at once
 DEFAULT_PLOT_STYLE = {
     'line': {
         'marker': 'o',
@@ -1092,6 +1304,7 @@ DEFAULT_PLOT_STYLE = {
         'suptitle_fontsize': 16,
         'title_fontsize': 14,
         'legend_fontsize': 10,
+        'ticks_fontsize': 10,
         'grid_alpha': 0.3
     }
 }
@@ -1157,7 +1370,7 @@ def filter_models_by_focus(df, focus_on=None):
     return df[final_mask].copy()
 
 def plot_subjects_comparison(df, metric='Balanced Accuracy', plot_type='line', 
-                           focus_on=None, plot_style=None, save_path=None):
+                           focus_on=None, layout='both', plot_style=None, save_path=None):
     """
     Create line or scatter plots showing all models across all 50 subjects
     
@@ -1168,6 +1381,10 @@ def plot_subjects_comparison(df, metric='Balanced Accuracy', plot_type='line',
         focus_on: str, list of str, or None - filter models. Options:
                  'c5', 'c12', 'embedded', 'not_embedded', 'multiscale', 'not_multiscale'
                  Can be single string or list for multiple filters (AND logic)
+        layout: str - Controls which plots to show. Options:
+                'both': Show both subject types (row 0) and model families (row 1) - 2x3 layout
+                'subject_type': Show only by subject types - 1x3 layout
+                'model_family': Show only by model families - 1x3 layout
         plot_style: dict, plotting style parameters (uses DEFAULT_PLOT_STYLE if None)
         save_path: Optional path to save the plot
         
@@ -1178,6 +1395,11 @@ def plot_subjects_comparison(df, metric='Balanced Accuracy', plot_type='line',
     # Use default style if none provided
     if plot_style is None:
         plot_style = DEFAULT_PLOT_STYLE
+    
+    # Validate layout parameter
+    valid_layouts = ['both', 'subject_type', 'model_family']
+    if layout not in valid_layouts:
+        raise ValueError(f"Invalid layout: {layout}. Valid options: {valid_layouts}")
     
     # Filter models based on focus
     filtered_df = filter_models_by_focus(df, focus_on)
@@ -1241,107 +1463,125 @@ def plot_subjects_comparison(df, metric='Balanced Accuracy', plot_type='line',
     else:
         focus_suffix = ""
     
+    # Create layout suffix for title
+    layout_suffix = {
+        'both': '',
+        'subject_type': ' - By Subject Type',
+        'model_family': ' - By Model Family'
+    }[layout]
+    
     with sns.plotting_context(plot_style['figure']['context']):
-        # Create subplots: 2 rows x 3 cols
-        fig, axes = plt.subplots(2, 3, figsize=plot_style['figure']['figsize_2x3'])
-        fig.suptitle(f'All Subjects {metric} Comparison ({plot_type.title()} Plot){focus_suffix}', 
-                     fontsize=plot_style['figure']['suptitle_fontsize'], y=0.98)
+        # Determine subplot layout based on layout parameter
+        if layout == 'both':
+            fig, axes = plt.subplots(2, 3, figsize=plot_style['figure']['figsize_2x3'])
+            fig.suptitle(f'All Subjects {metric} Comparison ({plot_type.title()} Plot){focus_suffix}{layout_suffix}', 
+                         fontsize=plot_style['figure']['suptitle_fontsize'], y=0.98)
+        else:
+            fig, axes = plt.subplots(1, 3, figsize=plot_style['figure']['figsize_1x3'])
+            axes = axes.reshape(1, 3)  # Ensure consistent indexing
+            fig.suptitle(f'All Subjects {metric} Comparison ({plot_type.title()} Plot){focus_suffix}{layout_suffix}', 
+                         fontsize=plot_style['figure']['suptitle_fontsize'], y=0.98)
         
         subject_types = ['dependent', 'independent', 'adaptive']
         
-        # Row 0: By Subject Type
-        for col, subject_type in enumerate(subject_types):
-            ax = axes[0, col]
-            
-            # Filter data for this subject type
-            subject_data = plot_df[plot_df['subject_type'] == subject_type]
-            
-            if not subject_data.empty:
-                # Get unique models for this subject type
-                unique_models = subject_data['model'].unique()
+        # Plot by Subject Type (always row 0, or only row if layout='subject_type')
+        if layout in ['both', 'subject_type']:
+            row_idx = 0
+            for col, subject_type in enumerate(subject_types):
+                ax = axes[row_idx, col]
                 
-                # Get colors for this subject type
-                subject_colors = color_dict.get(subject_type, {})
+                # Filter data for this subject type
+                subject_data = plot_df[plot_df['subject_type'] == subject_type]
                 
-                for model in unique_models:
-                    model_data = subject_data[subject_data['model'] == model]
-                    if not model_data.empty:
-                        # Get model key for color
-                        model_key = model_data.iloc[0]['model_key']
-                        color = subject_colors.get(model_key, 'gray')
-                        
-                        # Sort by subject_id for proper line connection
-                        model_data_sorted = model_data.sort_values('subject_id')
-                        
-                        if plot_type == 'line':
-                            ax.plot(model_data_sorted['subject_id'], model_data_sorted['score'],
-                                   color=color, label=model, **plot_style['line'])
-                        else:  # scatter
-                            ax.scatter(model_data_sorted['subject_id'], model_data_sorted['score'],
-                                     color=color, label=model, **plot_style['scatter'])
-            
-            # Formatting
-            ax.set_ylim(0, 100)
-            ax.set_xlim(0.5, 50.5)
-            ax.set_title(f'{subject_type.title()} Models', 
-                        fontsize=plot_style['figure']['title_fontsize'], fontweight='bold')
-            ax.set_ylabel(f'{metric} (%)' if col == 0 else '')
-            ax.set_xlabel('Subject ID')
-            ax.grid(True, alpha=plot_style['figure']['grid_alpha'])
-            ax.legend(fontsize=plot_style['figure']['legend_fontsize'], loc='best')
+                if not subject_data.empty:
+                    # Get unique models for this subject type
+                    unique_models = subject_data['model'].unique()
+                    
+                    # Get colors for this subject type
+                    subject_colors = color_dict.get(subject_type, {})
+                    
+                    for model in unique_models:
+                        model_data = subject_data[subject_data['model'] == model]
+                        if not model_data.empty:
+                            # Get model key for color
+                            model_key = model_data.iloc[0]['model_key']
+                            color = subject_colors.get(model_key, 'gray')
+                            
+                            # Sort by subject_id for proper line connection
+                            model_data_sorted = model_data.sort_values('subject_id')
+                            
+                            if plot_type == 'line':
+                                ax.plot(model_data_sorted['subject_id'], model_data_sorted['score'],
+                                       color=color, label=model, **plot_style['line'])
+                            else:  # scatter
+                                ax.scatter(model_data_sorted['subject_id'], model_data_sorted['score'],
+                                         color=color, label=model, **plot_style['scatter'])
+                
+                # Formatting
+                ax.set_ylim(0, 100)
+                ax.set_xlim(0.5, 50.5)
+                ax.set_title(f'{subject_type.title()} Models', 
+                            fontsize=plot_style['figure']['title_fontsize'], fontweight='bold')
+                ax.set_ylabel(f'{metric} (%)' if col == 0 else '')
+                if layout == 'subject_type' or row_idx == 1:  # Bottom row or single row
+                    ax.set_xlabel('Subject ID')
+                ax.grid(True, alpha=plot_style['figure']['grid_alpha'])
+                ax.legend(fontsize=plot_style['figure']['legend_fontsize'], loc='best')
         
-        # Row 1: By Model Family
-        model_families = ['DCN', 'MSN', 'DSN']
-        
-        for col, model_family in enumerate(model_families):
-            ax = axes[1, col]
+        # Plot by Model Family (row 1 if layout='both', or only row if layout='model_family')
+        if layout in ['both', 'model_family']:
+            row_idx = 1 if layout == 'both' else 0
+            model_families = ['DCN', 'MSN', 'DSN']
             
-            # Filter data for this model family
-            if model_family == 'DCN':
-                family_data = plot_df[plot_df['model'] == 'DCN']
-            elif model_family == 'MSN':
-                family_data = plot_df[plot_df['model'].str.startswith('MSN')]
-            else:  # DSN
-                family_data = plot_df[plot_df['model'].str.startswith('DSN')]
-            
-            if not family_data.empty:
-                # Get unique models for this family
-                unique_models = family_data['model'].unique()
+            for col, model_family in enumerate(model_families):
+                ax = axes[row_idx, col]
                 
-                for model in unique_models:
-                    model_data = family_data[family_data['model'] == model]
-                    if not model_data.empty:
-                        # Group by subject type to get appropriate colors
-                        for subject_type in subject_types:
-                            subject_model_data = model_data[model_data['subject_type'] == subject_type]
-                            if not subject_model_data.empty:
-                                # Get color for this subject type and model
-                                model_key = subject_model_data.iloc[0]['model_key']
-                                subject_colors = color_dict.get(subject_type, {})
-                                color = subject_colors.get(model_key, 'gray')
-                                
-                                # Sort by subject_id for proper line connection
-                                subject_model_sorted = subject_model_data.sort_values('subject_id')
-                                
-                                # Create label combining model and subject type
-                                label = f"{model} ({subject_type})"
-                                
-                                if plot_type == 'line':
-                                    ax.plot(subject_model_sorted['subject_id'], subject_model_sorted['score'],
-                                           color=color, label=label, **plot_style['line'])
-                                else:  # scatter
-                                    ax.scatter(subject_model_sorted['subject_id'], subject_model_sorted['score'],
-                                             color=color, label=label, **plot_style['scatter'])
-            
-            # Formatting
-            ax.set_ylim(0, 100)
-            ax.set_xlim(0.5, 50.5)
-            ax.set_title(f'{model_family} Models', 
-                        fontsize=plot_style['figure']['title_fontsize'], fontweight='bold')
-            ax.set_ylabel(f'{metric} (%)' if col == 0 else '')
-            ax.set_xlabel('Subject ID')
-            ax.grid(True, alpha=plot_style['figure']['grid_alpha'])
-            ax.legend(fontsize=plot_style['figure']['legend_fontsize'], loc='best')
+                # Filter data for this model family
+                if model_family == 'DCN':
+                    family_data = plot_df[plot_df['model'] == 'DCN']
+                elif model_family == 'MSN':
+                    family_data = plot_df[plot_df['model'].str.startswith('MSN')]
+                else:  # DSN
+                    family_data = plot_df[plot_df['model'].str.startswith('DSN')]
+                
+                if not family_data.empty:
+                    # Get unique models for this family
+                    unique_models = family_data['model'].unique()
+                    
+                    for model in unique_models:
+                        model_data = family_data[family_data['model'] == model]
+                        if not model_data.empty:
+                            # Group by subject type to get appropriate colors
+                            for subject_type in subject_types:
+                                subject_model_data = model_data[model_data['subject_type'] == subject_type]
+                                if not subject_model_data.empty:
+                                    # Get color for this subject type and model
+                                    model_key = subject_model_data.iloc[0]['model_key']
+                                    subject_colors = color_dict.get(subject_type, {})
+                                    color = subject_colors.get(model_key, 'gray')
+                                    
+                                    # Sort by subject_id for proper line connection
+                                    subject_model_sorted = subject_model_data.sort_values('subject_id')
+                                    
+                                    # Create label combining model and subject type
+                                    label = f"{model} ({subject_type})"
+                                    
+                                    if plot_type == 'line':
+                                        ax.plot(subject_model_sorted['subject_id'], subject_model_sorted['score'],
+                                               color=color, label=label, **plot_style['line'])
+                                    else:  # scatter
+                                        ax.scatter(subject_model_sorted['subject_id'], subject_model_sorted['score'],
+                                                 color=color, label=label, **plot_style['scatter'])
+                
+                # Formatting
+                ax.set_ylim(0, 100)
+                ax.set_xlim(0.5, 50.5)
+                ax.set_title(f'{model_family} Models', 
+                            fontsize=plot_style['figure']['title_fontsize'], fontweight='bold')
+                ax.set_ylabel(f'{metric} (%)' if col == 0 else '')
+                ax.set_xlabel('Subject ID')  # Always show x-label for bottom row
+                ax.grid(True, alpha=plot_style['figure']['grid_alpha'])
+                ax.legend(fontsize=plot_style['figure']['legend_fontsize'], loc='best')
         
         plt.tight_layout()
         
@@ -1353,10 +1593,12 @@ def plot_subjects_comparison(df, metric='Balanced Accuracy', plot_type='line',
                     focus_str = f"_{focus_on}"
             else:
                 focus_str = ""
-            plot_name = f'subjects_{plot_type}_{metric.lower().replace(" ", "_")}_comparison{focus_str}.png'
+            
+            layout_str = f"_{layout}" if layout != 'both' else ""
+            plot_name = f'subjects_{plot_type}_{metric.lower().replace(" ", "_")}_comparison{focus_str}{layout_str}.png'
             fig.savefig(os.path.join(save_path, plot_name), 
                        dpi=300, bbox_inches='tight')
-            print(f"💾 Subjects {plot_type} plot saved to {save_path}")
+            print(f"💾 Subjects {plot_type} plot ({layout}) saved to {save_path}")
         
         return fig
 
@@ -1511,18 +1753,34 @@ def plot_subjects_by_type_only(df, metric='Balanced Accuracy', plot_type='line',
         
         return fig
 
-# Convenience functions
 def plot_subjects_scatter_comparison(df, metric='Balanced Accuracy', focus_on=None, 
-                                   plot_style=None, save_path=None):
-    """Convenience function for scatter plots of all subjects"""
+                                   layout='both', plot_style=None, save_path=None):
+    """Convenience function for scatter plots of all subjects with layout control"""
     return plot_subjects_comparison(df, metric=metric, plot_type='scatter', 
-                                  focus_on=focus_on, plot_style=plot_style, save_path=save_path)
+                                  focus_on=focus_on, layout=layout, 
+                                  plot_style=plot_style, save_path=save_path)
 
 def plot_subjects_line_comparison(df, metric='Balanced Accuracy', focus_on=None, 
-                                plot_style=None, save_path=None):
-    """Convenience function for line plots of all subjects"""
+                                layout='both', plot_style=None, save_path=None):
+    """Convenience function for line plots of all subjects with layout control"""
     return plot_subjects_comparison(df, metric=metric, plot_type='line', 
-                                  focus_on=focus_on, plot_style=plot_style, save_path=save_path)
+                                  focus_on=focus_on, layout=layout, 
+                                  plot_style=plot_style, save_path=save_path)
+
+# New convenience functions for specific layouts
+def plot_subjects_by_subject_type_only(df, metric='Balanced Accuracy', plot_type='line', 
+                                     focus_on=None, plot_style=None, save_path=None):
+    """Convenience function to show only subject type plots (1x3 layout)"""
+    return plot_subjects_comparison(df, metric=metric, plot_type=plot_type, 
+                                  focus_on=focus_on, layout='subject_type', 
+                                  plot_style=plot_style, save_path=save_path)
+
+def plot_subjects_by_model_family_only(df, metric='Balanced Accuracy', plot_type='line', 
+                                     focus_on=None, plot_style=None, save_path=None):
+    """Convenience function to show only model family plots (1x3 layout)"""
+    return plot_subjects_comparison(df, metric=metric, plot_type=plot_type, 
+                                  focus_on=focus_on, layout='model_family', 
+                                  plot_style=plot_style, save_path=save_path)
 
 def plot_subjects_by_type_scatter(df, metric='Balanced Accuracy', focus_on=None, 
                                 plot_style=None, save_path=None):
@@ -1535,6 +1793,337 @@ def plot_subjects_by_type_line(df, metric='Balanced Accuracy', focus_on=None,
     """Convenience function for line plots by subject type only"""
     return plot_subjects_by_type_only(df, metric=metric, plot_type='line', 
                                     focus_on=focus_on, plot_style=plot_style, save_path=save_path)
+
+def plot_subjects_dcn_ordered(df, metric='Balanced Accuracy', plot_type='line', 
+                             focus_on=None, plot_style=None, save_path=None):
+    """
+    Create plots showing all models ordered by DCN performance for each subject type
+    Each subject type has its own DCN-based ordering (lowest to highest DCN accuracy)
+    
+    This function analyzes whether other models follow similar patterns to DCN baseline
+    
+    Args:
+        df: DataFrame with results
+        metric: 'Balanced Accuracy' or 'F1 Macro'
+        plot_type: 'line' or 'scatter'
+        focus_on: str, list of str, or None - filter models. Options:
+                 'c5', 'c12', 'embedded', 'not_embedded', 'multiscale', 'not_multiscale'
+                 Can be single string or list for multiple filters (AND logic)
+        plot_style: dict, plotting style parameters (uses DEFAULT_PLOT_STYLE if None)
+        save_path: Optional path to save the plot
+        
+    Returns:
+        matplotlib figure
+    """
+    
+    # Use default style if none provided
+    if plot_style is None:
+        plot_style = DEFAULT_PLOT_STYLE
+    
+    # Filter models based on focus
+    filtered_df = filter_models_by_focus(df, focus_on)
+    
+    # Model name mapping
+    def get_model_short_name(row):
+        model_mapping = {
+            'dcn': 'DCN',
+            'msn': 'MSN',
+            'msn_embedded': 'MSN(emb)',
+            'multiscale_msn': 'MSN(multi)',
+            'multiscale_msn_embedded': 'MSN(multi+emb)',
+            'dsn_msn': 'DSN',
+            'dsn_msn_embedded': 'DSN(emb)',
+            'dsn_multiscale_msn': 'DSN(multi)',
+            'dsn_multiscale_msn_embedded': 'DSN(multi+emb)'
+        }
+        
+        base_name = model_mapping.get(row['model_name'], row['model_name'])
+        
+        # Add cluster info for non-DCN models
+        if row['model_name'] != 'dcn':
+            return f"{base_name}_C{row['cluster_size']}"
+        else:
+            return base_name
+    
+    # Get color mappings
+    color_dict = get_model_colors(filtered_df)
+    
+    # Check if DCN exists for each subject type
+    subject_types = ['dependent', 'independent', 'adaptive']
+    dcn_data = {}
+    subject_orderings = {}
+    
+    for subject_type in subject_types:
+        # Find DCN for this subject type
+        dcn_row = filtered_df[(filtered_df['subject_type'] == subject_type) & 
+                             (filtered_df['model_name'] == 'dcn')]
+        
+        if dcn_row.empty:
+            print(f"⚠️  Warning: No DCN found for {subject_type} subject type")
+            continue
+            
+        dcn_row = dcn_row.iloc[0]
+        
+        # Get DCN scores for all subjects
+        if metric == 'Balanced Accuracy':
+            dcn_scores = dcn_row['test_bal_acc_all']
+        else:  # F1 Macro
+            dcn_scores = dcn_row['test_f1_all']
+        
+        # Create subject ordering based on DCN scores (lowest to highest)
+        subject_score_pairs = [(i + 1, score) for i, score in enumerate(dcn_scores)]
+        subject_score_pairs.sort(key=lambda x: x[1])  # Sort by score (ascending)
+        
+        # Store the ordering and DCN data
+        subject_orderings[subject_type] = subject_score_pairs
+        dcn_data[subject_type] = dcn_scores
+        
+        print(f"📊 {subject_type.title()}: DCN scores range from "
+              f"{min(dcn_scores):.2f}% to {max(dcn_scores):.2f}%")
+    
+    # Prepare plot data with DCN ordering
+    plot_data = []
+    
+    for _, row in filtered_df.iterrows():
+        subject_type = row['subject_type']
+        
+        # Skip if no DCN ordering available for this subject type
+        if subject_type not in subject_orderings:
+            continue
+            
+        model_short = get_model_short_name(row)
+        model_key = get_model_key(row)
+        
+        # Choose the right score column based on metric
+        if metric == 'Balanced Accuracy':
+            all_scores = row['test_bal_acc_all']
+        else:  # F1 Macro
+            all_scores = row['test_f1_all']
+        
+        # Get the DCN-based ordering for this subject type
+        ordered_subjects = subject_orderings[subject_type]
+        
+        # Add each subject's score using DCN ordering
+        for order_idx, (original_subject_id, dcn_score) in enumerate(ordered_subjects):
+            model_score = all_scores[original_subject_id - 1]  # Convert to 0-indexed
+            
+            plot_data.append({
+                'subject_type': subject_type,
+                'model': model_short,
+                'model_key': model_key,
+                'original_subject_id': original_subject_id,
+                'dcn_ordered_position': order_idx + 1,  # 1-indexed position
+                'dcn_score': dcn_score,
+                'model_score': model_score
+            })
+    
+    plot_df = pd.DataFrame(plot_data)
+    
+    if plot_df.empty:
+        print("❌ No data to plot - DCN not found in any subject type")
+        return None
+    
+    # Create focus suffix for title
+    if focus_on:
+        if isinstance(focus_on, list):
+            focus_suffix = f" (Focus: {', '.join(focus_on)})"
+        else:
+            focus_suffix = f" (Focus: {focus_on})"
+    else:
+        focus_suffix = ""
+    
+    with sns.plotting_context(plot_style['figure']['context']):
+        # Create subplots: 1 row x 3 cols (one per subject type)
+        fig, axes = plt.subplots(1, 3, figsize=plot_style['figure']['figsize_1x3'])
+        fig.suptitle(f'Subjects Ordered by DCN Performance - {metric} ({plot_type.title()} Plot){focus_suffix}', 
+                     fontsize=plot_style['figure']['suptitle_fontsize'], y=0.98)
+        
+        for col, subject_type in enumerate(subject_types):
+            ax = axes[col]
+            
+            # Filter data for this subject type
+            subject_data = plot_df[plot_df['subject_type'] == subject_type]
+            
+            if subject_data.empty:
+                ax.text(0.5, 0.5, f'No DCN data\nfor {subject_type}', 
+                       ha='center', va='center', transform=ax.transAxes,
+                       fontsize=12, color='red')
+                ax.set_title(f'{subject_type.title()} Models (No DCN)', 
+                            fontsize=plot_style['figure']['title_fontsize'], fontweight='bold')
+                continue
+            
+            # Get unique models for this subject type
+            unique_models = subject_data['model'].unique()
+            
+            # Get colors for this subject type
+            subject_colors = color_dict.get(subject_type, {})
+            
+            # Plot each model
+            for model in unique_models:
+                model_data = subject_data[subject_data['model'] == model]
+                if not model_data.empty:
+                    # Get model key for color
+                    model_key = model_data.iloc[0]['model_key']
+                    color = subject_colors.get(model_key, 'gray')
+                    
+                    # Sort by DCN-ordered position for proper line connection
+                    model_data_sorted = model_data.sort_values('dcn_ordered_position')
+                    
+                    # Highlight DCN with special styling
+                    if model == 'DCN':
+                        if plot_type == 'line':
+                            ax.plot(model_data_sorted['dcn_ordered_position'], 
+                                   model_data_sorted['model_score'],
+                                   color=color, label=f'{model} (baseline)', 
+                                   linewidth=plot_style['line']['linewidth'] + 1,
+                                   marker=plot_style['line']['marker'],
+                                   markersize=plot_style['line']['markersize'] + 2,
+                                   alpha=1.0, linestyle='-')  # Solid line for DCN
+                        else:  # scatter
+                            ax.scatter(model_data_sorted['dcn_ordered_position'], 
+                                     model_data_sorted['model_score'],
+                                     color=color, label=f'{model} (baseline)', 
+                                     s=plot_style['scatter']['s'] + 20,
+                                     alpha=1.0, marker='D')  # Diamond for DCN
+                    else:
+                        if plot_type == 'line':
+                            ax.plot(model_data_sorted['dcn_ordered_position'], 
+                                   model_data_sorted['model_score'],
+                                   color=color, label=model, **plot_style['line'])
+                        else:  # scatter
+                            ax.scatter(model_data_sorted['dcn_ordered_position'], 
+                                     model_data_sorted['model_score'],
+                                     color=color, label=model, **plot_style['scatter'])
+            
+            # Formatting
+            ax.set_ylim(0, 100)
+            ax.set_xlim(0.5, 50.5)
+            ax.set_title(f'{subject_type.title()} Models\n(Ordered by DCN: {min(dcn_data[subject_type]):.1f}% → {max(dcn_data[subject_type]):.1f}%)', 
+                        fontsize=plot_style['figure']['title_fontsize'], fontweight='bold')
+            ax.set_ylabel(f'{metric} (%)' if col == 0 else '')
+            ax.set_xlabel('Subjects (Ordered by DCN Performance)')
+            ax.grid(True, alpha=plot_style['figure']['grid_alpha'])
+            
+            # Custom x-tick labels showing original subject IDs
+            if subject_type in subject_orderings:
+                ordered_subjects = subject_orderings[subject_type]
+                # Show every 5th subject ID to avoid crowding
+                tick_positions = range(1, len(ordered_subjects))
+                tick_labels = [str(ordered_subjects[pos-1][0]) for pos in tick_positions]
+                ax.set_xticks(tick_positions)
+                ax.set_xticklabels(tick_labels, rotation=45, fontsize=plot_style['figure']['ticks_fontsize'])
+            
+            ax.legend(fontsize=plot_style['figure']['legend_fontsize'], loc='best')
+        
+        plt.tight_layout()
+        
+        if save_path:
+            if focus_on:
+                if isinstance(focus_on, list):
+                    focus_str = f"_{'_'.join(focus_on)}"
+                else:
+                    focus_str = f"_{focus_on}"
+            else:
+                focus_str = ""
+            
+            plot_name = f'subjects_dcn_ordered_{plot_type}_{metric.lower().replace(" ", "_")}{focus_str}.png'
+            fig.savefig(os.path.join(save_path, plot_name), 
+                       dpi=300, bbox_inches='tight')
+            print(f"💾 DCN-ordered subjects {plot_type} plot saved to {save_path}")
+        
+        return fig
+
+def analyze_dcn_correlation(df, metric='Balanced Accuracy', focus_on=None):
+    """
+    Analyze correlation between DCN performance and other models across subjects
+    
+    Args:
+        df: DataFrame with results
+        metric: 'Balanced Accuracy' or 'F1 Macro'
+        focus_on: str, list of str, or None - filter models
+        
+    Returns:
+        dict: Correlation analysis results
+    """
+    
+    # Filter models based on focus
+    filtered_df = filter_models_by_focus(df, focus_on)
+    
+    subject_types = ['dependent', 'independent', 'adaptive']
+    correlation_results = {}
+    
+    for subject_type in subject_types:
+        # Find DCN for this subject type
+        dcn_row = filtered_df[(filtered_df['subject_type'] == subject_type) & 
+                             (filtered_df['model_name'] == 'dcn')]
+        
+        if dcn_row.empty:
+            print(f"⚠️  No DCN found for {subject_type}")
+            continue
+            
+        dcn_row = dcn_row.iloc[0]
+        
+        # Get DCN scores
+        if metric == 'Balanced Accuracy':
+            dcn_scores = dcn_row['test_bal_acc_all']
+        else:
+            dcn_scores = dcn_row['test_f1_all']
+        
+        # Calculate correlations with other models
+        model_correlations = {}
+        
+        other_models = filtered_df[(filtered_df['subject_type'] == subject_type) & 
+                                  (filtered_df['model_name'] != 'dcn')]
+        
+        for _, row in other_models.iterrows():
+            model_key = get_model_key(row)
+            
+            if metric == 'Balanced Accuracy':
+                model_scores = row['test_bal_acc_all']
+            else:
+                model_scores = row['test_f1_all']
+            
+            # Calculate Pearson correlation
+            correlation = np.corrcoef(dcn_scores, model_scores)[0, 1]
+            model_correlations[model_key] = correlation
+        
+        correlation_results[subject_type] = {
+            'dcn_mean': np.mean(dcn_scores),
+            'dcn_std': np.std(dcn_scores),
+            'correlations': model_correlations
+        }
+    
+    # Print correlation summary
+    print(f"\n📈 DCN Correlation Analysis ({metric})")
+    print("=" * 60)
+    
+    for subject_type, results in correlation_results.items():
+        print(f"\n{subject_type.upper()}:")
+        print(f"  DCN Performance: {results['dcn_mean']:.2f}% ± {results['dcn_std']:.2f}%")
+        print("  Correlations with DCN:")
+        
+        # Sort by correlation strength
+        sorted_corrs = sorted(results['correlations'].items(), 
+                             key=lambda x: abs(x[1]), reverse=True)
+        
+        for model_key, corr in sorted_corrs:
+            strength = "Strong" if abs(corr) > 0.7 else "Moderate" if abs(corr) > 0.4 else "Weak"
+            print(f"    {model_key}: {corr:.3f} ({strength})")
+    
+    return correlation_results
+
+# Convenience functions for DCN-ordered analysis
+def plot_subjects_dcn_ordered_scatter(df, metric='Balanced Accuracy', focus_on=None, 
+                                    plot_style=None, save_path=None):
+    """Convenience function for DCN-ordered scatter plots"""
+    return plot_subjects_dcn_ordered(df, metric=metric, plot_type='scatter', 
+                                   focus_on=focus_on, plot_style=plot_style, save_path=save_path)
+
+def plot_subjects_dcn_ordered_line(df, metric='Balanced Accuracy', focus_on=None, 
+                                 plot_style=None, save_path=None):
+    """Convenience function for DCN-ordered line plots"""
+    return plot_subjects_dcn_ordered(df, metric=metric, plot_type='line', 
+                                   focus_on=focus_on, plot_style=plot_style, save_path=save_path)
 
 # ================================== Statistics =====================================
 """
