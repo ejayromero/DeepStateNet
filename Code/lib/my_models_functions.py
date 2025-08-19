@@ -1096,29 +1096,49 @@ def print_cv_summary(cv_balanced_accs, cv_f1_scores, n_folds):
 
 
 def print_final_summary(all_results, model_name, n_folds):
-    """Print final summary of all subjects' results"""
-    test_bal_accs = [r['test_balanced_accuracy'] for r in all_results]
-    test_f1s = [r['test_f1_macro'] for r in all_results]
+    """Print final summary of all subjects' results - handles both CV-only and CV+test formats"""
+    
+    n_subjects = len(all_results)
+    print(f"\n{'='*80}")
+    print(f"🎯 FINAL SUMMARY - {model_name} ({n_subjects} subjects, {n_folds}-fold CV)")
+    print(f"{'='*80}")
+    
+    # Extract CV metrics (always available)
     cv_bal_accs = [r['mean_cv_balanced_acc'] for r in all_results]
     cv_f1s = [r['mean_cv_f1'] for r in all_results]
     
-    print(f"\n🎯 Overall Results Summary:")
-    print(f"Model: {model_name}")
-    print(f"Configuration: {n_folds}-fold CV with 10% test split")
-    print(f"Test Results:")
-    print(f"  Mean Test Balanced Accuracy: {np.mean(test_bal_accs):.2f}% ± {np.std(test_bal_accs):.2f}%")
-    print(f"  Mean Test F1 Macro: {np.mean(test_f1s):.2f}% ± {np.std(test_f1s):.2f}%")
-    print(f"  Best Subject Test Bal Acc: {np.max(test_bal_accs):.2f}%")
-    print(f"  Worst Subject Test Bal Acc: {np.min(test_bal_accs):.2f}%")
-    print(f"\n{n_folds}-Fold Cross-Validation Results:")
-    print(f"  Mean CV Balanced Accuracy: {np.mean(cv_bal_accs):.2f}% ± {np.std(cv_bal_accs):.2f}%")
-    print(f"  Mean CV F1 Macro: {np.mean(cv_f1s):.2f}% ± {np.std(cv_f1s):.2f}%")
-    print(f"  Best Subject CV Bal Acc: {np.max(cv_bal_accs):.2f}%")
-    print(f"  Worst Subject CV Bal Acc: {np.min(cv_bal_accs):.2f}%")
+    # Check if test metrics are available (backward compatibility)
+    has_test_metrics = 'test_balanced_accuracy' in all_results[0] if all_results else False
     
-    # Correlation between CV and Test performance
-    cv_test_corr = np.corrcoef(cv_bal_accs, test_bal_accs)[0, 1]
-    print(f"\nCV-Test Correlation: {cv_test_corr:.3f}")
+    if has_test_metrics:
+        # Old format with test metrics
+        test_bal_accs = [r['test_balanced_accuracy'] for r in all_results]
+        test_f1s = [r['test_f1_macro'] for r in all_results]
+        
+        print(f"📊 Cross-Validation Results (mean ± std across {n_subjects} subjects):")
+        print(f"   Balanced Accuracy: {np.mean(cv_bal_accs):.2f}% ± {np.std(cv_bal_accs):.2f}%")
+        print(f"   F1 Score (macro):  {np.mean(cv_f1s):.2f}% ± {np.std(cv_f1s):.2f}%")
+        print(f"")
+        print(f"🎯 Test Set Results (mean ± std across {n_subjects} subjects):")
+        print(f"   Balanced Accuracy: {np.mean(test_bal_accs):.2f}% ± {np.std(test_bal_accs):.2f}%")
+        print(f"   F1 Score (macro):  {np.mean(test_f1s):.2f}% ± {np.std(test_f1s):.2f}%")
+        print(f"")
+        print(f"📈 Per-Subject CV vs Test Performance:")
+        for i, (cv_acc, test_acc) in enumerate(zip(cv_bal_accs, test_bal_accs)):
+            print(f"   Subject {i:2d}: CV = {cv_acc:5.2f}%, Test = {test_acc:5.2f}% (Δ = {test_acc-cv_acc:+5.2f}%)")
+    else:
+        # New format with CV-only metrics
+        print(f"📊 Cross-Validation Results (mean ± std across {n_subjects} subjects):")
+        print(f"   Balanced Accuracy: {np.mean(cv_bal_accs):.2f}% ± {np.std(cv_bal_accs):.2f}%")
+        print(f"   F1 Score (macro):  {np.mean(cv_f1s):.2f}% ± {np.std(cv_f1s):.2f}%")
+        print(f"")
+        print(f"📈 Per-Subject CV Performance:")
+        for i, cv_acc in enumerate(cv_bal_accs):
+            print(f"   Subject {i:2d}: CV = {cv_acc:5.2f}%")
+    
+    print(f"{'='*80}")
+    print(f"✅ {model_name} training completed successfully!")
+    print(f"{'='*80}")
 
 
 def save_results(all_results, output_file):
