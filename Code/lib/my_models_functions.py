@@ -1200,64 +1200,124 @@ def save_results(all_results, output_file):
 # =============================================================================
 
 def plot_cv_results(all_results, output_path, type_of_subject, model_name, n_subjects):
-    """Plot training results with CV for any model type"""
-    # Use colorblind-friendly colors
-    colors = sns.color_palette("colorblind")
+    """Plot cross-validation results - handles both CV-only and CV+test formats"""
     
-    all_test_balanced_accs = [result['test_balanced_accuracy'] for result in all_results]
-    all_test_f1s = [result['test_f1_macro'] for result in all_results]
+    # Check if test metrics are available
+    has_test_metrics = 'test_balanced_accuracy' in all_results[0] if all_results else False
+    
+    # Extract CV metrics (always available)
     all_cv_balanced_accs = [result['mean_cv_balanced_acc'] for result in all_results]
     all_cv_f1s = [result['mean_cv_f1'] for result in all_results]
     
-    # Plot test metrics vs CV metrics
-    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
-    fig.suptitle(f'{type_of_subject.title()} {model_name.upper()} - CV vs Test Performance Comparison', fontsize=16, y=0.98)
-    
-    # Test Balanced Accuracy
-    axes[0, 0].plot(all_test_balanced_accs, marker='o', linestyle='-', color=colors[0], label='Test', linewidth=2)
-    axes[0, 0].plot(all_cv_balanced_accs, marker='s', linestyle='--', color=colors[0], alpha=0.5, label='CV Mean', linewidth=2)
-    axes[0, 0].set_title(f'Test vs CV Balanced Accuracy')
-    axes[0, 0].set_xlabel('Subject ID')
-    axes[0, 0].set_ylabel('Balanced Accuracy (%)')
-    axes[0, 0].set_ylim(0, 102)
-    axes[0, 0].legend()
-    axes[0, 0].set_xticks(range(0, n_subjects, max(1, n_subjects//10)))
-    axes[0, 0].set_xticklabels([f'S{i}' for i in range(0, n_subjects, max(1, n_subjects//10))], rotation=45)
-    
-    # Test F1 Macro
-    axes[0, 1].plot(all_test_f1s, marker='o', linestyle='-', color=colors[1], label='Test', linewidth=2)
-    axes[0, 1].plot(all_cv_f1s, marker='s', linestyle='--', color=colors[1], alpha=0.5, label='CV Mean', linewidth=2)
-    axes[0, 1].set_title(f'Test vs CV F1 Macro')
-    axes[0, 1].set_xlabel('Subject ID')
-    axes[0, 1].set_ylabel('F1 Macro (%)')
-    axes[0, 1].set_ylim(0, 102)
-    axes[0, 1].legend()
-    axes[0, 1].set_xticks(range(0, n_subjects, max(1, n_subjects//10)))
-    axes[0, 1].set_xticklabels([f'S{i}' for i in range(0, n_subjects, max(1, n_subjects//10))], rotation=45)
-    
-    # CV Validation Scores Distribution
-    all_cv_individual_scores = []
-    for result in all_results:
-        all_cv_individual_scores.extend(result['cv_balanced_accuracies'])
-    
-    axes[1, 0].hist(all_cv_individual_scores, bins=20, alpha=0.7, color=colors[2])
-    axes[1, 0].set_title('Distribution of CV Fold Balanced Accuracies')
-    axes[1, 0].set_xlabel('Balanced Accuracy (%)')
-    axes[1, 0].set_ylabel('Frequency')
-    axes[1, 0].set_xlim(0, 102)
-    
-    # Test vs CV correlation
-    axes[1, 1].scatter(all_cv_balanced_accs, all_test_balanced_accs, alpha=0.6, color=colors[5], s=60)
-    axes[1, 1].plot([0, 100], [0, 100], 'r--', alpha=0.5)
-    axes[1, 1].set_title('CV vs Test Balanced Accuracy Correlation')
-    axes[1, 1].set_xlabel('CV Mean Balanced Accuracy (%)')
-    axes[1, 1].set_ylabel('Test Balanced Accuracy (%)')
-    axes[1, 1].set_xlim(0, 102)
-    axes[1, 1].set_ylim(0, 102)
+    if has_test_metrics:
+        # Old format with test metrics
+        all_test_balanced_accs = [result['test_balanced_accuracy'] for result in all_results]
+        all_test_f1s = [result['test_f1_macro'] for result in all_results]
+        
+        # Create figure with 2x2 subplots
+        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+        fig.suptitle(f'{model_name} Results - {type_of_subject.title()} Analysis ({n_subjects} subjects)', 
+                     fontsize=16, fontweight='bold')
+        
+        # Plot 1: CV vs Test Balanced Accuracy
+        axes[0, 0].plot(range(n_subjects), all_cv_balanced_accs, 'o-', label='CV Balanced Accuracy', 
+                        color='blue', alpha=0.7, linewidth=2, markersize=6)
+        axes[0, 0].plot(range(n_subjects), all_test_balanced_accs, 's-', label='Test Balanced Accuracy', 
+                        color='red', alpha=0.7, linewidth=2, markersize=6)
+        axes[0, 0].set_xlabel('Subject ID')
+        axes[0, 0].set_ylabel('Balanced Accuracy (%)')
+        axes[0, 0].set_title('CV vs Test: Balanced Accuracy')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True, alpha=0.3)
+        axes[0, 0].set_ylim([0, 100])
+        
+        # Plot 2: CV vs Test F1 Score
+        axes[0, 1].plot(range(n_subjects), all_cv_f1s, 'o-', label='CV F1 Score', 
+                        color='green', alpha=0.7, linewidth=2, markersize=6)
+        axes[0, 1].plot(range(n_subjects), all_test_f1s, 's-', label='Test F1 Score', 
+                        color='orange', alpha=0.7, linewidth=2, markersize=6)
+        axes[0, 1].set_xlabel('Subject ID')
+        axes[0, 1].set_ylabel('F1 Score (%)')
+        axes[0, 1].set_title('CV vs Test: F1 Score (Macro)')
+        axes[0, 1].legend()
+        axes[0, 1].grid(True, alpha=0.3)
+        axes[0, 1].set_ylim([0, 100])
+        
+        # Plot 3: Distribution of CV Balanced Accuracy
+        axes[1, 0].hist(all_cv_balanced_accs, bins=min(15, n_subjects//3), alpha=0.7, color='blue', edgecolor='black')
+        axes[1, 0].axvline(np.mean(all_cv_balanced_accs), color='red', linestyle='--', linewidth=2, 
+                          label=f'Mean: {np.mean(all_cv_balanced_accs):.2f}%')
+        axes[1, 0].set_xlabel('CV Balanced Accuracy (%)')
+        axes[1, 0].set_ylabel('Number of Subjects')
+        axes[1, 0].set_title('Distribution: CV Balanced Accuracy')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # Plot 4: Distribution of Test Balanced Accuracy
+        axes[1, 1].hist(all_test_balanced_accs, bins=min(15, n_subjects//3), alpha=0.7, color='red', edgecolor='black')
+        axes[1, 1].axvline(np.mean(all_test_balanced_accs), color='blue', linestyle='--', linewidth=2, 
+                          label=f'Mean: {np.mean(all_test_balanced_accs):.2f}%')
+        axes[1, 1].set_xlabel('Test Balanced Accuracy (%)')
+        axes[1, 1].set_ylabel('Number of Subjects')
+        axes[1, 1].set_title('Distribution: Test Balanced Accuracy')
+        axes[1, 1].legend()
+        axes[1, 1].grid(True, alpha=0.3)
+        
+    else:
+        # New format with CV-only metrics
+        # Create figure with 2x2 subplots (adapted for CV-only)
+        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+        fig.suptitle(f'{model_name} CV Results - {type_of_subject.title()} Analysis ({n_subjects} subjects)', 
+                     fontsize=16, fontweight='bold')
+        
+        # Plot 1: CV Balanced Accuracy
+        axes[0, 0].plot(range(n_subjects), all_cv_balanced_accs, 'o-', label='CV Balanced Accuracy', 
+                        color='blue', alpha=0.7, linewidth=2, markersize=6)
+        axes[0, 0].set_xlabel('Subject ID')
+        axes[0, 0].set_ylabel('Balanced Accuracy (%)')
+        axes[0, 0].set_title('Cross-Validation: Balanced Accuracy')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True, alpha=0.3)
+        axes[0, 0].set_ylim([0, 100])
+        
+        # Plot 2: CV F1 Score
+        axes[0, 1].plot(range(n_subjects), all_cv_f1s, 'o-', label='CV F1 Score', 
+                        color='green', alpha=0.7, linewidth=2, markersize=6)
+        axes[0, 1].set_xlabel('Subject ID')
+        axes[0, 1].set_ylabel('F1 Score (%)')
+        axes[0, 1].set_title('Cross-Validation: F1 Score (Macro)')
+        axes[0, 1].legend()
+        axes[0, 1].grid(True, alpha=0.3)
+        axes[0, 1].set_ylim([0, 100])
+        
+        # Plot 3: Distribution of CV Balanced Accuracy
+        axes[1, 0].hist(all_cv_balanced_accs, bins=min(15, n_subjects//3), alpha=0.7, color='blue', edgecolor='black')
+        axes[1, 0].axvline(np.mean(all_cv_balanced_accs), color='red', linestyle='--', linewidth=2, 
+                          label=f'Mean: {np.mean(all_cv_balanced_accs):.2f}%')
+        axes[1, 0].set_xlabel('CV Balanced Accuracy (%)')
+        axes[1, 0].set_ylabel('Number of Subjects')
+        axes[1, 0].set_title('Distribution: CV Balanced Accuracy')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # Plot 4: Distribution of CV F1 Score
+        axes[1, 1].hist(all_cv_f1s, bins=min(15, n_subjects//3), alpha=0.7, color='green', edgecolor='black')
+        axes[1, 1].axvline(np.mean(all_cv_f1s), color='red', linestyle='--', linewidth=2, 
+                          label=f'Mean: {np.mean(all_cv_f1s):.2f}%')
+        axes[1, 1].set_xlabel('CV F1 Score (%)')
+        axes[1, 1].set_ylabel('Number of Subjects')
+        axes[1, 1].set_title('Distribution: CV F1 Score')
+        axes[1, 1].legend()
+        axes[1, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_path, f'{type_of_subject}_{model_name}_CV_test_metrics.png'), dpi=300, bbox_inches='tight')
+    
+    # Save the plot
+    plot_filename = os.path.join(output_path, f'{type_of_subject}_{model_name}_cv_results.png')
+    plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
     plt.close()
+    
+    print(f"CV results plot saved: {plot_filename}")
 
 
 def plot_training_curves(all_results, output_path, type_of_subject, model_name):
