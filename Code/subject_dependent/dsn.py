@@ -233,7 +233,7 @@ def extract_features_from_model(model, data, device, batch_size=32):
 
 
 def train_subject(subject_id, args, device, data_path, pretrained_models):
-    """Train DeepStateNet for a single subject with K-fold CV and 10% test split"""
+    """Train DeepStateNet for a single subject with K-fold CV on ALL data"""
     print(f"\n▶ Training Subject {subject_id}")
     
     # Load single subject data for memory efficiency
@@ -249,27 +249,14 @@ def train_subject(subject_id, args, device, data_path, pretrained_models):
     print(f"Subject {subject_id} labels shape: {y.shape}")
     print(f"Number of classes: {len(torch.unique(y))}")
     
-    # Split: 90% for CV, 10% for final test
-    indices = np.arange(len(y))
-    cv_indices, test_indices = train_test_split(
-        indices, test_size=0.1, random_state=42, stratify=y.numpy())
-    
-    raw_cv, raw_test = raw_x[cv_indices], raw_x[test_indices]
-    ms_cv, ms_test = ms_x[cv_indices], ms_x[test_indices]
-    y_cv, y_test = y[cv_indices], y[test_indices]
-    
-    print(f"CV data: Raw {raw_cv.shape}, MS {ms_cv.shape}, Test data: Raw {raw_test.shape}, MS {ms_test.shape}")
-    
-    # Extract features from pretrained models for all data first
+    # Extract features from pretrained models for all data
     print(f"Extracting features from pretrained DCN model...")
-    raw_features_cv = extract_features_from_model(pretrained_models['dcn'][subject_id], raw_cv, device)
-    raw_features_test = extract_features_from_model(pretrained_models['dcn'][subject_id], raw_test, device)
+    raw_features = extract_features_from_model(pretrained_models['dcn'][subject_id], raw_x, device)
     
     print(f"Extracting features from pretrained MicroStateNet model...")
-    ms_features_cv = extract_features_from_model(pretrained_models['ms'][subject_id], ms_cv, device)
-    ms_features_test = extract_features_from_model(pretrained_models['ms'][subject_id], ms_test, device)
+    ms_features = extract_features_from_model(pretrained_models['ms'][subject_id], ms_x, device)
     
-    # K-Fold Cross Validation
+    # K-Fold Cross Validation on ALL data (no separate test set)
     skf = StratifiedKFold(n_splits=args.n_folds, shuffle=True, random_state=42)
     
     # Store results for each fold
@@ -277,19 +264,21 @@ def train_subject(subject_id, args, device, data_path, pretrained_models):
     cv_balanced_accs = []
     cv_f1_scores = []
     
-    for fold, (train_idx, val_idx) in enumerate(skf.split(raw_features_cv, y_cv)):
+    for fold, (train_idx, val_idx) in enumerate(skf.split(raw_features, y)):
         print(f"\n--- Fold {fold + 1}/{args.n_folds} ---")
         
-        # Get fold data using extracted features
-        raw_train_fold = raw_features_cv[train_idx]
-        ms_train_fold = ms_features_cv[train_idx]
-        y_train_fold = y_cv[train_idx]
-        raw_val_fold = raw_features_cv[val_idx]
-        ms_val_fold = ms_features_cv[val_idx]
-        y_val_fold = y_cv[val_idx]
+        # Get fold data using extracted features ((K-1)/K train, 1/K val for each fold)
+        raw_train_fold = raw_features[train_idx]
+        ms_train_fold = ms_features[train_idx]
+        y_train_fold = y[train_idx]
+        raw_val_fold = raw_features[val_idx]
+        ms_val_fold = ms_features[val_idx]
+        y_val_fold = y[val_idx]
         
-        print(f"Fold {fold + 1}: Train Raw {raw_train_fold.shape}, MS {ms_train_fold.shape}")
-        print(f"Fold {fold + 1}: Val Raw {raw_val_fold.shape}, MS {ms_val_fold.shape}")
+        train_pct = (args.n_folds - 1) / args.n_folds * 100
+        val_pct = 1 / args.n_folds * 100
+        print(f"Fold {fold + 1}: Train Raw {raw_train_fold.shape}, MS {ms_train_fold.shape} ({train_pct:.1f}%)")
+        print(f"Fold {fold + 1}: Val Raw {raw_val_fold.shape}, MS {ms_val_fold.shape} ({val_pct:.1f}%)")
         
         # DataLoaders for this fold
         train_loader = DataLoader(TensorDataset(raw_train_fold, ms_train_fold, y_train_fold), 
@@ -412,40 +401,12 @@ def train_subject(subject_id, args, device, data_path, pretrained_models):
     best_model = fold_results[best_fold_idx]['model']
     print(f"Best fold: {best_fold_idx + 1} (Val Bal Acc: {cv_balanced_accs[best_fold_idx]:.2f}%)")
     
-    # Final test on held-out test set using best model - USING SHARED FUNCTION STYLE
-    test_loader = DataLoader(TensorDataset(raw_features_test, ms_features_test, y_test), 
-                            batch_size=args.batch_size, shuffle=False)
-    
-    best_model.eval()
-    test_total = 0
-    all_test_preds = []
-    all_test_targets = []
-    
-    with torch.no_grad():
-        for raw_batch, ms_batch, label_batch in test_loader:
-            raw_batch = raw_batch.to(device)
-            ms_batch = ms_batch.to(device)
-            label_batch = label_batch.to(device)
-            
-            outputs = best_model(raw_batch, ms_batch)
-            preds = outputs.argmax(dim=1)
-            
-            test_total += label_batch.size(0)
-            all_test_preds.extend(preds.cpu().numpy())
-            all_test_targets.extend(label_batch.cpu().numpy())
-    
-    test_balanced_acc = balanced_accuracy_score(all_test_targets, all_test_preds) * 100
-    test_f1 = f1_score(all_test_targets, all_test_preds, average='macro') * 100
-    conf_matrix = confusion_matrix(all_test_targets, all_test_preds)
-    
-    print(f"🎯 Final Test Results - Balanced Acc: {test_balanced_acc:.2f}%, F1: {test_f1:.2f}%")
-    
     # Aggregate training curves across folds - USING SHARED FUNCTION
     training_curves = mmf.aggregate_fold_training_curves(fold_results)
     
     # Clean up memory
-    del raw_data, ms_data, raw_x, ms_x, y, raw_cv, raw_test, ms_cv, ms_test, y_cv, y_test
-    del raw_features_cv, raw_features_test, ms_features_cv, ms_features_test
+    del raw_data, ms_data, raw_x, ms_x, y
+    del raw_features, ms_features
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
@@ -457,9 +418,6 @@ def train_subject(subject_id, args, device, data_path, pretrained_models):
         'std_cv_balanced_acc': std_cv_bal_acc,
         'mean_cv_f1': mean_cv_f1,
         'std_cv_f1': std_cv_f1,
-        'test_balanced_accuracy': test_balanced_acc,
-        'test_f1_macro': test_f1,
-        'confusion_matrix': conf_matrix,
         'best_fold_idx': best_fold_idx,
         'fold_results': fold_results,
         'best_model': best_model,
@@ -523,8 +481,8 @@ def main():
     parser.add_argument('--type-of-subject', type=str, default='dependent',
                         choices=['independent', 'dependent', 'adaptive'],
                         help='type of subject analysis (default: dependent)')
-    parser.add_argument('--n-folds', type=int, default=4, metavar='K',
-                        help='number of CV folds (default: 4)')
+    parser.add_argument('--n-folds', type=int, default=5, metavar='K',
+                        help='number of CV folds (default: 5)')
     parser.add_argument('--save-model', action='store_true', default=True,
                         help='For Saving the current Model')
     
@@ -609,7 +567,7 @@ def main():
     if os.path.exists(output_file):
         print(f"Found existing results file: {output_file}")
         existing_results = np.load(output_file, allow_pickle=True).item()
-        n_existing = len(existing_results.get('test_balanced_accuracies', []))
+        n_existing = len(existing_results.get('mean_cv_balanced_accs', []))
         print(f"Found {n_existing} existing subjects. Resuming from subject {n_existing}...")
         
         # Convert existing results to our format
@@ -622,9 +580,6 @@ def main():
                 'std_cv_balanced_acc': existing_results['std_cv_balanced_accs'][i],
                 'mean_cv_f1': existing_results['mean_cv_f1s'][i],
                 'std_cv_f1': existing_results['std_cv_f1s'][i],
-                'test_balanced_accuracy': existing_results['test_balanced_accuracies'][i],
-                'test_f1_macro': existing_results['test_f1_macros'][i],
-                'confusion_matrix': existing_results['confusion_matrices'][i],
                 'best_fold_idx': existing_results['best_fold_indices'][i],
                 'train_losses_mean': existing_results['train_curves_mean']['train_losses_mean'][i],
                 'train_balanced_accuracies_mean': existing_results['train_curves_mean']['train_balanced_accuracies_mean'][i],
@@ -634,6 +589,10 @@ def main():
                 'val_f1_macros_mean': existing_results['train_curves_mean']['val_f1_macros_mean'][i],
                 'best_model': existing_results['best_models'][i]
             }
+            # Add fold_results if available (for backward compatibility)
+            if 'fold_results' in existing_results:
+                result['fold_results'] = existing_results['fold_results'][i]
+            
             all_results.append(result)
         start_subject = n_existing
     else:
@@ -655,9 +614,6 @@ def main():
                 'std_cv_balanced_accs': [r['std_cv_balanced_acc'] for r in all_results],
                 'mean_cv_f1s': [r['mean_cv_f1'] for r in all_results],
                 'std_cv_f1s': [r['std_cv_f1'] for r in all_results],
-                'test_balanced_accuracies': [r['test_balanced_accuracy'] for r in all_results],
-                'test_f1_macros': [r['test_f1_macro'] for r in all_results],
-                'confusion_matrices': [r['confusion_matrix'] for r in all_results],
                 'best_fold_indices': [r['best_fold_idx'] for r in all_results],
                 'train_curves_mean': {
                     'train_losses_mean': [r['train_losses_mean'] for r in all_results],
@@ -667,7 +623,8 @@ def main():
                     'val_balanced_accuracies_mean': [r['val_balanced_accuracies_mean'] for r in all_results],
                     'val_f1_macros_mean': [r['val_f1_macros_mean'] for r in all_results],
                 },
-                'best_models': [r['best_model'] for r in all_results]
+                'best_models': [r['best_model'] for r in all_results],
+                'fold_results': [r['fold_results'] for r in all_results]  # Store individual fold results
             }
             np.save(output_file, results_dict)
             print(f"Results saved to {output_file}")

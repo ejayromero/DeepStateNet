@@ -62,7 +62,7 @@ def create_model_combinations():
     clusters = [5,12]  # Multiple cluster sizes (for MSN and DSN)
     n_subjects = 50
     epochs = 100
-    n_folds = 4
+    n_folds = 5
     batch_size = 32
     lr = 1e-3
     
