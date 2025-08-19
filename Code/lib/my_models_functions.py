@@ -1200,7 +1200,7 @@ def save_results(all_results, output_file):
 # =============================================================================
 
 def plot_cv_results(all_results, output_path, type_of_subject, model_name, n_subjects):
-    """Plot cross-validation results - handles both CV-only and CV+test formats"""
+    """Plot cross-validation results with std error bars - handles both CV-only and CV+test formats"""
     
     # Check if test metrics are available
     has_test_metrics = 'test_balanced_accuracy' in all_results[0] if all_results else False
@@ -1208,6 +1208,10 @@ def plot_cv_results(all_results, output_path, type_of_subject, model_name, n_sub
     # Extract CV metrics (always available)
     all_cv_balanced_accs = [result['mean_cv_balanced_acc'] for result in all_results]
     all_cv_f1s = [result['mean_cv_f1'] for result in all_results]
+    all_cv_balanced_stds = [result['std_cv_balanced_acc'] for result in all_results]
+    all_cv_f1_stds = [result['std_cv_f1'] for result in all_results]
+    
+    subject_indices = range(n_subjects)
     
     if has_test_metrics:
         # Old format with test metrics
@@ -1219,10 +1223,11 @@ def plot_cv_results(all_results, output_path, type_of_subject, model_name, n_sub
         fig.suptitle(f'{model_name} Results - {type_of_subject.title()} Analysis ({n_subjects} subjects)', 
                      fontsize=16, fontweight='bold')
         
-        # Plot 1: CV vs Test Balanced Accuracy
-        axes[0, 0].plot(range(n_subjects), all_cv_balanced_accs, 'o-', label='CV Balanced Accuracy', 
-                        color='blue', alpha=0.7, linewidth=2, markersize=6)
-        axes[0, 0].plot(range(n_subjects), all_test_balanced_accs, 's-', label='Test Balanced Accuracy', 
+        # Plot 1: CV vs Test Balanced Accuracy with CV error bars
+        axes[0, 0].errorbar(subject_indices, all_cv_balanced_accs, yerr=all_cv_balanced_stds,
+                           fmt='o-', label='CV Balanced Accuracy (± STD)', 
+                           color='blue', alpha=0.7, linewidth=2, markersize=6, capsize=3)
+        axes[0, 0].plot(subject_indices, all_test_balanced_accs, 's-', label='Test Balanced Accuracy', 
                         color='red', alpha=0.7, linewidth=2, markersize=6)
         axes[0, 0].set_xlabel('Subject ID')
         axes[0, 0].set_ylabel('Balanced Accuracy (%)')
@@ -1231,10 +1236,11 @@ def plot_cv_results(all_results, output_path, type_of_subject, model_name, n_sub
         axes[0, 0].grid(True, alpha=0.3)
         axes[0, 0].set_ylim([0, 100])
         
-        # Plot 2: CV vs Test F1 Score
-        axes[0, 1].plot(range(n_subjects), all_cv_f1s, 'o-', label='CV F1 Score', 
-                        color='green', alpha=0.7, linewidth=2, markersize=6)
-        axes[0, 1].plot(range(n_subjects), all_test_f1s, 's-', label='Test F1 Score', 
+        # Plot 2: CV vs Test F1 Score with CV error bars
+        axes[0, 1].errorbar(subject_indices, all_cv_f1s, yerr=all_cv_f1_stds,
+                           fmt='o-', label='CV F1 Score (± STD)', 
+                           color='green', alpha=0.7, linewidth=2, markersize=6, capsize=3)
+        axes[0, 1].plot(subject_indices, all_test_f1s, 's-', label='Test F1 Score', 
                         color='orange', alpha=0.7, linewidth=2, markersize=6)
         axes[0, 1].set_xlabel('Subject ID')
         axes[0, 1].set_ylabel('F1 Score (%)')
@@ -1270,9 +1276,10 @@ def plot_cv_results(all_results, output_path, type_of_subject, model_name, n_sub
         fig.suptitle(f'{model_name} CV Results - {type_of_subject.title()} Analysis ({n_subjects} subjects)', 
                      fontsize=16, fontweight='bold')
         
-        # Plot 1: CV Balanced Accuracy
-        axes[0, 0].plot(range(n_subjects), all_cv_balanced_accs, 'o-', label='CV Balanced Accuracy', 
-                        color='blue', alpha=0.7, linewidth=2, markersize=6)
+        # Plot 1: CV Balanced Accuracy with error bars
+        axes[0, 0].errorbar(subject_indices, all_cv_balanced_accs, yerr=all_cv_balanced_stds,
+                           fmt='o-', label='CV Balanced Accuracy (± STD)', 
+                           color='blue', alpha=0.7, linewidth=2, markersize=6, capsize=3)
         axes[0, 0].set_xlabel('Subject ID')
         axes[0, 0].set_ylabel('Balanced Accuracy (%)')
         axes[0, 0].set_title('Cross-Validation: Balanced Accuracy')
@@ -1280,9 +1287,10 @@ def plot_cv_results(all_results, output_path, type_of_subject, model_name, n_sub
         axes[0, 0].grid(True, alpha=0.3)
         axes[0, 0].set_ylim([0, 100])
         
-        # Plot 2: CV F1 Score
-        axes[0, 1].plot(range(n_subjects), all_cv_f1s, 'o-', label='CV F1 Score', 
-                        color='green', alpha=0.7, linewidth=2, markersize=6)
+        # Plot 2: CV F1 Score with error bars
+        axes[0, 1].errorbar(subject_indices, all_cv_f1s, yerr=all_cv_f1_stds,
+                           fmt='o-', label='CV F1 Score (± STD)', 
+                           color='green', alpha=0.7, linewidth=2, markersize=6, capsize=3)
         axes[0, 1].set_xlabel('Subject ID')
         axes[0, 1].set_ylabel('F1 Score (%)')
         axes[0, 1].set_title('Cross-Validation: F1 Score (Macro)')
@@ -1307,6 +1315,32 @@ def plot_cv_results(all_results, output_path, type_of_subject, model_name, n_sub
         axes[1, 1].set_xlabel('CV F1 Score (%)')
         axes[1, 1].set_ylabel('Number of Subjects')
         axes[1, 1].set_title('Distribution: CV F1 Score')
+        axes[1, 1].legend()
+        axes[1, 1].grid(True, alpha=0.3)
+        
+    # Add additional CV standard deviation distribution plots (bottom row)
+    if not has_test_metrics:
+        # For CV-only format, we can show std distributions instead of test distributions
+        axes[1, 0].clear()
+        axes[1, 1].clear()
+        
+        # Plot 3: Distribution of CV Standard Deviations for Balanced Accuracy
+        axes[1, 0].hist(all_cv_balanced_stds, bins=min(15, n_subjects//3), alpha=0.7, color='lightblue', edgecolor='black')
+        axes[1, 0].axvline(np.mean(all_cv_balanced_stds), color='red', linestyle='--', linewidth=2, 
+                          label=f'Mean STD: {np.mean(all_cv_balanced_stds):.2f}%')
+        axes[1, 0].set_xlabel('CV Standard Deviation (%)')
+        axes[1, 0].set_ylabel('Number of Subjects')
+        axes[1, 0].set_title('Distribution: CV Balanced Accuracy STD')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # Plot 4: Distribution of CV Standard Deviations for F1 Score
+        axes[1, 1].hist(all_cv_f1_stds, bins=min(15, n_subjects//3), alpha=0.7, color='lightgreen', edgecolor='black')
+        axes[1, 1].axvline(np.mean(all_cv_f1_stds), color='red', linestyle='--', linewidth=2, 
+                          label=f'Mean STD: {np.mean(all_cv_f1_stds):.2f}%')
+        axes[1, 1].set_xlabel('CV Standard Deviation (%)')
+        axes[1, 1].set_ylabel('Number of Subjects')
+        axes[1, 1].set_title('Distribution: CV F1 Score STD')
         axes[1, 1].legend()
         axes[1, 1].grid(True, alpha=0.3)
     
@@ -1471,19 +1505,22 @@ def plot_training_curves(all_results, output_path, type_of_subject, model_name):
 
 
 def plot_confusion_matrix(all_results, output_path, type_of_subject, model_name):
-    """Plot average confusion matrix across all subjects"""
+    """Plot average confusion matrix across all subjects - handles both CV-only and CV+test formats"""
     if len(all_results) == 0:
+        return
+    
+    # Check if confusion matrices are available (only in old format with test metrics)
+    has_confusion_matrix = 'confusion_matrix' in all_results[0] if all_results else False
+    
+    if not has_confusion_matrix:
+        print(f"No confusion matrices available for {model_name} (CV-only format) - skipping confusion matrix plot")
         return
         
     all_conf_matrices = [result['confusion_matrix'] for result in all_results]
     avg_conf_matrix = np.mean(all_conf_matrices, axis=0)
     
-    # Remove the percentage normalization - just use raw numbers
-    # Old code (commented out):
-    # conf_matrix_pct = avg_conf_matrix.astype('float') / avg_conf_matrix.sum(axis=1)[:, np.newaxis]
-    
-    # Use raw numbers instead
-    conf_matrix_raw = avg_conf_matrix.astype('int')  # Convert to integers for cleaner display
+    # Use raw numbers instead of percentages for cleaner display
+    conf_matrix_raw = avg_conf_matrix.astype('int')
     
     name_classes = {0: 'rest', 1: 'open', 2: 'close'}
     plt.figure(figsize=(8, 6))
@@ -1494,8 +1531,12 @@ def plot_confusion_matrix(all_results, output_path, type_of_subject, model_name)
     plt.ylabel('True Label')
     plt.xlabel('Predicted Label')
     plt.tight_layout()
-    plt.savefig(os.path.join(output_path, f'{type_of_subject}_{model_name}_avg_confusion_matrix.png'))
+    
+    plot_filename = os.path.join(output_path, f'{type_of_subject}_{model_name}_avg_confusion_matrix.png')
+    plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
     plt.close()
+    
+    print(f"Confusion matrix plot saved: {plot_filename}")
 
 
 def plot_all_results(all_results, output_path, type_of_subject, model_name, n_subjects=None):
