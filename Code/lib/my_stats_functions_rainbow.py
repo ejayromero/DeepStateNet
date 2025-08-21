@@ -2,7 +2,6 @@
 Clean Statistical Analysis Functions for EEG Model Performance
 Single-line execution for different analysis types
 Updated to handle CV-based results instead of test-based results
-Custom color palettes for dependent models only
 """
 
 import os
@@ -124,7 +123,7 @@ def extract_single_result_file(file_path, model_info):
                 'k_folds': model_info['k_folds'],
             }
         
-        # Calculate summary statistics - ONLY CV VALUES
+        # Calculate summary statistics
         extracted_data = {
             # File metadata
             'file_path': str(file_path),
@@ -138,7 +137,7 @@ def extract_single_result_file(file_path, model_info):
             'cluster_size': model_info.get('cluster_size', 'N/A'),
             'k_folds': model_info['k_folds'],
             
-            # CV performance metrics
+            # CV performance metrics (renamed from test_ to cv_ for clarity)
             'cv_bal_acc_mean': np.mean(cv_bal_accs),
             'cv_bal_acc_std': np.std(cv_bal_accs),
             'cv_bal_acc_min': np.min(cv_bal_accs),
@@ -154,6 +153,19 @@ def extract_single_result_file(file_path, model_info):
             # All fold results (if available) - for deeper analysis
             'all_fold_bal_acc': all_fold_bal_accs,
             'all_fold_f1': all_fold_f1s,
+            
+            # Keep old naming for backward compatibility
+            'test_bal_acc_mean': np.mean(cv_bal_accs),
+            'test_bal_acc_std': np.std(cv_bal_accs),
+            'test_bal_acc_min': np.min(cv_bal_accs),
+            'test_bal_acc_max': np.max(cv_bal_accs),
+            'test_bal_acc_all': cv_bal_accs,
+            
+            'test_f1_mean': np.mean(cv_f1s),
+            'test_f1_std': np.std(cv_f1s),
+            'test_f1_min': np.min(cv_f1s),
+            'test_f1_max': np.max(cv_f1s),
+            'test_f1_all': cv_f1s,
         }
         
         # Add standard deviation info if available
@@ -211,7 +223,7 @@ def extract_all_results(output_path='../Output/ica_rest_all/', verbose=True):
     found_files = 0
     
     for subject_type in config['subject_types']:
-        print(f"\n🔄 Processing subject type: {subject_type}")
+        print(f"\n🔍 Processing subject type: {subject_type}")
         models_for_this_type = config['models_by_subject_type'][subject_type]
         
         for model_name in models_for_this_type:
@@ -287,7 +299,7 @@ def create_results_dataframe(extracted_results):
         print("❌ No successful results found!")
         return pd.DataFrame()
     
-    # Create DataFrame with main metrics - ONLY CV VALUES
+    # Create DataFrame with main metrics
     df_data = []
     
     for result in successful_results:
@@ -303,15 +315,23 @@ def create_results_dataframe(extracted_results):
             'is_cv_based': result.get('is_cv_based', True),
             'is_embedded': is_embedded,
             
-            # CV metrics only
+            # CV metrics (primary)
             'cv_bal_acc_mean': result['cv_bal_acc_mean'],
             'cv_bal_acc_std': result['cv_bal_acc_std'],
             'cv_f1_mean': result['cv_f1_mean'],
             'cv_f1_std': result['cv_f1_std'],
             
+            # Keep test_ naming for backward compatibility
+            'test_bal_acc_mean': result['cv_bal_acc_mean'],
+            'test_bal_acc_std': result['cv_bal_acc_std'],
+            'test_f1_mean': result['cv_f1_mean'],
+            'test_f1_std': result['cv_f1_std'],
+            
             # Individual subject scores (for plotting)
             'cv_bal_acc_all': result['cv_bal_acc_all'],
             'cv_f1_all': result['cv_f1_all'],
+            'test_bal_acc_all': result['cv_bal_acc_all'],  # Backward compatibility
+            'test_f1_all': result['cv_f1_all'],  # Backward compatibility
         }
         
         # Add per-subject standard deviations if available
@@ -560,7 +580,9 @@ def show_experiment_status(extracted_results):
         'completion_rate': total_completed/total_results*100
     }
 
-# ============================== Custom Color Functions for Dependent Only =================================
+# ============================== Plotting Functions =================================
+# All plotting functions remain the same since they use test_bal_acc_mean which we map to cv_bal_acc_mean
+
 
 def get_model_order_key(model_key):
     """
@@ -616,6 +638,7 @@ def get_model_order_key(model_key):
     else:
         return (3, cluster_size, 0, model_name)
 
+
 def sort_models_consistently(model_keys):
     """
     Sort model keys in consistent order: DCN, MSN variants, DSN variants
@@ -628,6 +651,41 @@ def sort_models_consistently(model_keys):
     """
     return sorted(model_keys, key=get_model_order_key)
 
+
+def generate_n_spectrum_palettes(n_palettes, n_color_shades=3, 
+                                 light_sat=0.45, light_val=0.87,
+                                 medium_sat=0.72, medium_val=0.73,
+                                 dark_sat=0.82, dark_val=0.53):
+    """Generate n distinct color palettes using full spectrum division"""
+    
+    # Split full spectrum into n_palettes+1 parts, take first n_palettes
+    hue_step = 1.0 / (n_palettes + 1)
+    base_hues = [i * hue_step for i in range(n_palettes)]
+    
+    palettes = {}
+    
+    for i, base_hue in enumerate(base_hues):
+        colors = []
+        
+        if n_color_shades == 3:
+            # Light, medium, dark
+            light_rgb = colorsys.hsv_to_rgb(base_hue, light_sat, light_val)
+            medium_rgb = colorsys.hsv_to_rgb(base_hue, medium_sat, medium_val)
+            dark_rgb = colorsys.hsv_to_rgb(base_hue, dark_sat, dark_val)
+            colors = [light_rgb, medium_rgb, dark_rgb]
+        else:
+            # Handle other cases if needed
+            sat_values = np.linspace(light_sat, dark_sat, n_color_shades)
+            val_values = np.linspace(light_val, dark_val, n_color_shades)
+            
+            for sat, val in zip(sat_values, val_values):
+                rgb = colorsys.hsv_to_rgb(base_hue, sat, val)
+                colors.append(rgb)
+        
+        palettes[f'model_{i+1}'] = colors
+    
+    return palettes
+
 def get_model_key(row):
     """Helper function to create consistent model keys"""
     if row['model_name'] == 'dcn':
@@ -635,109 +693,75 @@ def get_model_key(row):
     else:
         return f"{row['model_name']}_c{row['cluster_size']}"
 
-def get_custom_dependent_colors(df):
+def get_all_unique_models(df):
+    """Get all unique models across all subject types in consistent order"""
+    all_model_keys = []
+    
+    for _, row in df.iterrows():
+        model_key = get_model_key(row)
+        all_model_keys.append(model_key)
+    
+    # Get unique model keys preserving order, then sort consistently
+    unique_model_keys = list(dict.fromkeys(all_model_keys))
+    return sort_models_consistently(unique_model_keys)
+
+def get_model_colors(df):
     """
-    Generate custom color scheme for dependent models only:
-    - DCN: Red
-    - MSN C5: 'flare_r' palette
-    - MSN C12: 'autumn' palette (skip first color)
-    - DSN C5: 'viridis' palette
-    - DSN C12: 'cool_r' palette
+    Generate color palettes for each subject type based on available models
+    Creates consistent colors across subject types with different shades
     
     Args:
-        df: DataFrame with results (should only contain dependent models)
+        df: DataFrame with results containing 'model_name', 'cluster_size', 'subject_type'
         
     Returns:
-        dict: {'dependent': {model_key: color}}
+        dict: {subject_type: {model_key: color}}
     """
     
-    # Filter for dependent only (as requested)
-    dependent_df = df[df['subject_type'] == 'dependent']
+    # Get all unique models across all subject types
+    all_unique_models = get_all_unique_models(df)
+    n_models = len(all_unique_models)
     
-    if dependent_df.empty:
-        print("Warning: No dependent models found!")
-        return {'dependent': {}}
+    print(f"Found {n_models} unique models: {all_unique_models}")
     
-    # Categorize models by type and cluster size
-    model_categories = {
-        'dcn': [],
-        'msn_c5': [],
-        'msn_c12': [],
-        'dsn_c5': [],
-        'dsn_c12': []
+    # Generate n_models color palettes with 3 shades each
+    color_palettes = generate_n_spectrum_palettes(n_palettes=n_models, n_color_shades=3)
+    
+    # Map each model to its palette
+    model_to_palette = {}
+    for i, model_key in enumerate(all_unique_models):
+        palette_key = f'model_{i+1}'
+        model_to_palette[model_key] = color_palettes[palette_key]
+    
+    # Create the output in the SAME FORMAT as your original function
+    color_dict = {
+        'independent': {},    # Light shade (index 0)
+        'dependent': {},  # Medium shade (index 1)
+        'adaptive': {}      # Dark shade (index 2)
     }
     
-    for _, row in dependent_df.iterrows():
-        model_key = get_model_key(row)
+    # For each subject type, add colors for models that exist in that subject type
+    for subject_type in ['independent', 'dependent', 'adaptive']:
+        subject_df = df[df['subject_type'] == subject_type]
         
-        if row['model_name'] == 'dcn':
-            model_categories['dcn'].append(model_key)
-        elif row['model_name'].startswith('dsn'):
-            # DSN models (check DSN first since some contain 'msn' in the name)
-            if row['cluster_size'] == 5:
-                model_categories['dsn_c5'].append(model_key)
-            elif row['cluster_size'] == 12:
-                model_categories['dsn_c12'].append(model_key)
-        elif 'msn' in row['model_name']:
-            # MSN models (includes msn, msn_embedded, multiscale_msn, multiscale_msn_embedded)
-            if row['cluster_size'] == 5:
-                model_categories['msn_c5'].append(model_key)
-            elif row['cluster_size'] == 12:
-                model_categories['msn_c12'].append(model_key)
-    
-    # Sort each category consistently
-    for category in model_categories:
-        model_categories[category] = sort_models_consistently(model_categories[category])
-    
-    print(f"🎨 Model categorization for custom colors:")
-    for category, models in model_categories.items():
-        if models:
-            print(f"   {category}: {models}")
-    
-    # Generate colors for each category
-    color_dict = {'dependent': {}}
-    
-    # 1. DCN: Red
-    if model_categories['dcn']:
-        color_dict['dependent']['dcn'] = 'red'
-    
-    # 2. MSN C5: 'flare_r' palette
-    if model_categories['msn_c5']:
-        n_msn_c5 = len(model_categories['msn_c5'])
-        flare_r_colors = sns.color_palette("flare_r", n_colors=n_msn_c5)
-        for i, model_key in enumerate(model_categories['msn_c5']):
-            color_dict['dependent'][model_key] = flare_r_colors[i]
-    
-    # 3. MSN C12: 'autumn' palette (skip first color)
-    if model_categories['msn_c12']:
-        n_msn_c12 = len(model_categories['msn_c12'])
-        # Generate n+1 colors and skip the first one (index 0)
-        autumn_colors = sns.color_palette("autumn", n_colors=n_msn_c12 + 1)
-        autumn_colors = autumn_colors[1:]  # Skip first color (too close to red)
-        for i, model_key in enumerate(model_categories['msn_c12']):
-            color_dict['dependent'][model_key] = autumn_colors[i]
-    
-    # 4. DSN C5: 'viridis' palette
-    if model_categories['dsn_c5']:
-        n_dsn_c5 = len(model_categories['dsn_c5'])
-        viridis_colors = sns.color_palette("viridis", n_colors=n_dsn_c5)
-        for i, model_key in enumerate(model_categories['dsn_c5']):
-            color_dict['dependent'][model_key] = viridis_colors[i]
-    
-    # 5. DSN C12: 'cool_r' palette
-    if model_categories['dsn_c12']:
-        n_dsn_c12 = len(model_categories['dsn_c12'])
-        cool_r_colors = sns.color_palette("cool_r", n_colors=n_dsn_c12)
-        for i, model_key in enumerate(model_categories['dsn_c12']):
-            color_dict['dependent'][model_key] = cool_r_colors[i]
-    
-    print(f"🎨 Generated custom color scheme for {len(color_dict['dependent'])} models")
-    print(f"🔍 Available model keys in color_dict: {list(color_dict['dependent'].keys())}")
+        # Get model keys that exist in this subject type
+        existing_model_keys = []
+        for _, row in subject_df.iterrows():
+            model_key = get_model_key(row)
+            existing_model_keys.append(model_key)
+        
+        unique_existing = list(dict.fromkeys(existing_model_keys))
+        
+        # Assign appropriate shade based on subject type
+        shade_index = {'dependent': 1, 'independent': 0, 'adaptive': 2}[subject_type]
+        
+        for model_key in unique_existing:
+            if model_key in model_to_palette:
+                color_dict[subject_type][model_key] = model_to_palette[model_key][shade_index]
     
     return color_dict
 
 def get_color_for_row(row, color_dict):
-    """Get the appropriate color for a dataframe row"""
+    """Get the appropriate color for a dataframe row - UPDATED to match new format"""
     model_key = get_model_key(row)
     subject_type = row['subject_type']
     
@@ -813,17 +837,16 @@ def merge_plot_styles(custom_style=None):
     
     return merged_style
 
-# ============================== Updated Plotting Functions =================================
 
-def plot_model_comparison(df, score_types=['cv_bal_acc', 'cv_f1'], metric_type='CV', my_plot_style=None):
+def plot_model_comparison(df, score_types=['test_bal_acc', 'test_f1'], metric_type='CV', my_plot_style=None):
     """
     Main function that creates 2x2 subplots (top row: balanced accuracy, bottom row: f1)
-    Updated to use custom dependent colors and CV results only
+    Updated to use CV results but keep same interface for backward compatibility
     
     Args:
         df: DataFrame with model results
-        score_types: List of score types to plot (CV results only)
-        metric_type: Type of metric being plotted (default 'CV')
+        score_types: List of score types to plot (mapped to CV results)
+        metric_type: Type of metric being plotted (default changed to 'CV')
         my_plot_style: Custom plot style dictionary to override defaults
     """
     if df is None:
@@ -832,8 +855,8 @@ def plot_model_comparison(df, score_types=['cv_bal_acc', 'cv_f1'], metric_type='
     # Merge custom style with defaults
     style = merge_plot_styles(my_plot_style)
     
-    # Get the custom color dictionary for dependent models
-    color_dict = get_custom_dependent_colors(df)
+    # Get the color dictionary
+    color_dict = get_model_colors(df)
     subject_types = df['subject_type'].unique()
     n_subjects = len(subject_types)
     
@@ -846,21 +869,22 @@ def plot_model_comparison(df, score_types=['cv_bal_acc', 'cv_f1'], metric_type='
         if n_subjects == 1:
             axes = axes.reshape(2, 1)
         
-        # Plot balanced accuracy on top row
+        # Plot balanced accuracy on top row (use CV results)
         for j, subject_type in enumerate(subject_types):
             plot_single_metric(df, axes[0, j], score_types[0], color_dict, subject_type, style)
         
-        # Plot F1 on bottom row
+        # Plot F1 on bottom row (use CV results)
         for j, subject_type in enumerate(subject_types):
             plot_single_metric(df, axes[1, j], score_types[1], color_dict, subject_type, style)
         
         plt.tight_layout()
         plt.show()
 
+
 def plot_single_metric(df, ax, score_type, color_dict, subject_type, style):
     """
     Plot a single metric for a single subject type on given axis
-    Updated to handle CV results and custom colors
+    Updated to handle CV results and maintain consistent ordering
     """
     # Filter data for this subject type
     subset = df[df['subject_type'] == subject_type].copy()
@@ -880,19 +904,23 @@ def plot_single_metric(df, ax, score_type, color_dict, subject_type, style):
                 break
     
     subset_ordered = pd.DataFrame(subset_list)
+    colors = [color_dict[subject_type][key] for key in sorted_model_keys]
     
-    # Debug: Check if all model keys have colors
-    missing_colors = [key for key in sorted_model_keys if key not in color_dict[subject_type]]
-    if missing_colors:
-        print(f"⚠️  Warning: Missing colors for models: {missing_colors}")
-        print(f"Available colors: {list(color_dict[subject_type].keys())}")
-        print(f"Needed colors: {sorted_model_keys}")
+    # Map test_ metrics to cv_ metrics (backward compatibility)
+    metric_mapping = {
+        'test_bal_acc': 'cv_bal_acc',
+        'test_f1': 'cv_f1'
+    }
     
-    colors = [color_dict[subject_type].get(key, 'gray') for key in sorted_model_keys]
+    # Get the base metric name
+    if score_type in metric_mapping:
+        base_metric = metric_mapping[score_type]
+    else:
+        base_metric = score_type
     
-    # Get mean and std columns for CV metrics
-    mean_col = f'{score_type}_mean'
-    std_col = f'{score_type}_std'
+    # Get mean and std columns
+    mean_col = f'{base_metric}_mean'
+    std_col = f'{base_metric}_std'
     
     # Create bar plot with colors and style
     x_pos = range(len(subset_ordered))
@@ -926,10 +954,11 @@ def plot_single_metric(df, ax, score_type, color_dict, subject_type, style):
 
     ax.set_ylim(0, max(df[mean_col] + df[std_col]) + 5)
 
+
 def plot_model_violin_comparison(df, transpose=False, my_plot_style=None):
     """
     Create violin plots comparing all models across subject types
-    Updated to use custom colors and CV results only
+    Updated to use consistent ordering and CV results
     """
     # Merge custom style with defaults
     style = merge_plot_styles(my_plot_style)
@@ -956,8 +985,8 @@ def plot_model_violin_comparison(df, transpose=False, my_plot_style=None):
         else:
             return base_name
     
-    # Get custom color mappings
-    color_dict = get_custom_dependent_colors(df)
+    # Get color mappings using the dedicated function
+    color_dict = get_model_colors(df)
     
     # Prepare data for violin plots - include ALL models (both C5 and C12)
     plot_data = []
@@ -1042,7 +1071,7 @@ def plot_model_violin_comparison(df, transpose=False, my_plot_style=None):
                     subset_ordered.append(model_data)
                 subset_ordered = pd.concat(subset_ordered, ignore_index=True)
                 
-                # Get colors using the custom color function
+                # Get colors using the get_model_colors function
                 subject_colors = color_dict.get(subject_type, {})
                 colors = []
                 for model_key in sorted_model_keys:
@@ -1078,6 +1107,7 @@ def plot_model_violin_comparison(df, transpose=False, my_plot_style=None):
     plt.tight_layout()
     return fig
 
+
 def plot_violin_comparison(df, save_path=None, my_plot_style=None):
     """Create and optionally save violin comparison plot"""
     # Merge custom style with defaults
@@ -1093,6 +1123,7 @@ def plot_violin_comparison(df, save_path=None, my_plot_style=None):
         
         plt.close()
         return fig
+
 
 def filter_models_by_focus(df, focus_on=None):
     """
