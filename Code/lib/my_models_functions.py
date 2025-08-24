@@ -387,7 +387,7 @@ class ModelFactory:
     
     @staticmethod
     def _create_fusion_model(data_info, args, device):
-        """Create fusion model for dual modal data with proper feature dimensions"""
+        """Create fusion model for dual modal data with proper feature dimensions - UPDATED FOR 5-BRANCH × 256"""
         n_classes = 3
         
         # Use the ACTUAL feature dimensions from extracted features
@@ -397,15 +397,15 @@ class ModelFactory:
             ms_feature_dim = data_info['ms_feature_dim']
             print(f"Creating fusion model with EXTRACTED feature dimensions:")
         else:
-            # Fallback to defaults (this shouldn't happen with the fix)
+            # Fallback to defaults - UPDATED FOR 5-BRANCH × 256 MULTISCALE!
             print(f"WARNING: Using fallback dimensions - extracted features not found!")
             if 'multiscale' in args.model_name.lower():
-                ms_feature_dim = 384  # MultiScaleMicroStateNet outputs 384 features
+                ms_feature_dim = 1280  # MultiScaleMicroStateNet now outputs 1280 features (5 branches * 256 each)
             elif 'attention' in args.model_name.lower():
-                ms_feature_dim = 768  # AttentionMicroStateNet outputs variable features
+                ms_feature_dim = 768   # AttentionMicroStateNet outputs variable features
             else:
-                ms_feature_dim = 256  # Regular MicroStateNet outputs 256 features
-            raw_feature_dim = 256  # Standard DCN feature dimension
+                ms_feature_dim = 256   # Regular MicroStateNet outputs 256 features
+            raw_feature_dim = 256      # Standard DCN feature dimension
             print(f"Creating fusion model with FALLBACK feature dimensions:")
         
         print(f"  Raw feature dim: {raw_feature_dim}")
